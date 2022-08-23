@@ -12,3 +12,5 @@ Different folders are included in this repository:
 
 - ChIP-seq folder: contains all the code used for ChIP-seq analysis. Take into account that although single-end sequencing was used, R1 and R2 fastq files are available per sample. Please check the guidelines of Active Motif to understand why (https://www.activemotif.com/documents/2056.pdf) 
 
+- EPIC-DREM folder: contains all the code used for running EPIC-DREM. EPIC-DREM integrated ATAC and RNA-seq paired datasets
+
