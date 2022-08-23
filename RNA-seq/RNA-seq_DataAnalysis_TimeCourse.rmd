@@ -217,4 +217,224 @@ STAR-2.5.2b --genomeDir  --runThreadN 8 \
 done
 ```
 
-.bam files will be produced here
+.bam files were produced here 
+
+#Q30 filtering plus validation of bam files 
+
+Samtools was used for Q30 filtering of quality reads and reduce the possibility of having false positives in the data (https://github.com/samtools/samtools):
+
+```{r}
+parallel -j 8 "samtools view -b -q 30 {} > ~/"{.}".q30.bam" ::: *.out.bam
+```
+
+Then, Picard was used for the validation of the bam files (https://github.com/broadinstitute/picard):
+
+```{r}
+#For running this, Java needs to be loaded
+
+parallel -j 6 "java -jar ~/jar_root/picard.jar ValidateSamFile I={} O={.}.validated IGNORE=MISSING_TAG_NM IGNORE=MISSING_READ_GROUP IGNORE=READ_GROUP_NOT_FOUND IGNORE_WARNINGS=TRUE" ::: *.Aligned.sortedByCoord.out.bam
+
+```
+
+Picard will produce a .validated file. If everything was right, if we open the file it should say No errors found.
+
+#Obtaining gene counts using FeatureCounts from Rsubread
+
+For obtaining the gene counts, the following packages were needed:
+
+```{r}
+#R version used was 3.4.4
+install.packages("tidyverse") 
+
+source("https://bioconductor.org/biocLite.R")
+biocLite("Rsubread") 
+
+```
+
+Then:
+
+```{r}
+bams <- Sys.glob("*q30.bam")
+annot <- "~/gencode.v31.annotation.gff3"
+fc_hs <- Rsubread::featureCounts(files = bams, annot.ext = annot, nthreads = 8, 
+   isGTFAnnotationFile = TRUE, GTF.featureType = "exon", GTF.attrType = "gene_id", 
+   strandSpecific = 2)
+
+saveRDS(fc_hs, "fc_hs_q30RNA.rds")
+```
+
+.rds counts contain the counts per sample
+
+
+#DESeq2 analysis 
+
+To determine gene expression changes between the different samples analyzed, DESeq2 package from R was used (https://bioconductor.org/packages/release/bioc/html/DESeq2.html). The following packages had to be loaded:
+
+```{r}
+library(tidyverse)
+library(DESeq2)
+library(knitr)
+library(rtracklayer)
+library(RColorBrewer)
+library(pheatmap)
+```
+
+Extract information for the .rds file:
+
+```{r}
+fc_hs <- readr::read_rds("~/fc_hs_q30RNA.rds")
+rawcounts <- fc_hs$counts
+```
+
+A metadate file had to be created in order to run the analysis. Here is an example of what was used:
+
+```{r}
+sample <- c("Astro", "Astro", "Astro", "D15_NEG", "D15_NEG", "D15_NEG", "D15_POS", "D15_POS", "D15_POS", "D30_POS", "D30_POS", "D30_POS", "D50_NEG", "D50_NEG", "D50_NEG", "D50_POS", "D50_POS", "D50_POS", "smNPC", "smNPC", "smNPC")
+cell_type <- c("astrocyte", "astrocyte", "astrocyte", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "neuron", "smNPC", "smNPC", "smNPC")
+age <- c("65", "65", "65", "15", "15", "15", "15", "15", "15", "30", "30", "30", "50", "50", "50", "50", "50", "50", NA, NA, NA)
+sort <- c(NA, NA, NA, "neg", "neg", "neg", "pos", "pos", "pos", "pos", "pos", "pos", "neg", "neg", "neg", "pos", "pos", "pos", NA, NA, NA)
+
+info.data <- data.frame(sample, cell_type, age, sort)
+```
+
+Then, DESeq2 object was created:
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = rawcounts,
+                              colData = info.data,
+                              design = ~ sample)
+
+dds$sample <- factor(dds$sample, levels = c("smNPC", "D15_NEG", "D15_POS", "D30_POS", "D50_NEG", "D50_POS", "Astro"))
+```
+
+For creating a PCA plot:
+
+```{r}
+vst <- vst(dds, blind = TRUE)
+
+plotPCA(vst, intgroup = c("cell_type", "age", "sort"))
+```
+
+Low expressed genes were filtered from the dataset
+
+```{r}
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+```
+
+After the filtering, DESeq2 analysis was run:
+
+```{r}
+dds <- DESeq(dds)
+```
+
+In order to be able to compare different groups, the package "ashr" was used:
+
+```{r}
+library(ashr)
+#Here is an example for the comparison of smNPC with astrocytes, although it can be done among all groups
+result.astro.LFC <- lfcShrink(dds, contrast = c("sample", "Astro", "smNPC"), type = "ashr", lfcThreshold = 1)
+```
+
+#RPKM calculation for plotting the data
+
+Extract the rawcounts from the dds object. Remember that the dds object that we are using had a previous filtering:
+```{r}
+rawcount_2 <- counts(dds)
+```
+Extract the gene_length for the genes in rawcount_2 (for annotation use gencode.v31.annotation.gff3 file):
+
+```{r}
+gene_length <- fc_hs$annotation %>% 
+  select(GeneID, Length) %>%
+  filter(GeneID %in% rownames(rawcount_2))
+   
+```
+
+```{r}
+#After extraction of the gene length, we transform the results from bp to kb
+gene_length <- gene_length %>% 
+    mutate(length_kb = Length/1000)
+  
+# scaling factor. Here we are obtaining the reads per million for each individual sample. It is row wise. This is indicated using the number 2 in the function. 
+  scale_factor <- apply(rawcount_2,
+    2, function(x) sum(x))/1000000
+  scale_factor
+  
+# normalize to library size. 
+norm_counts <- rawcount_2 %>%  
+    sweep(., 2, scale_factor, "/")
+norm_counts
+  
+# rpkm. This is divided again by the gene length. 
+rawcount_2 %>% as.data.frame() %>% 
+  rownames_to_column(var = "GeneID") -> rawcount_2
+all_info <- left_join(rawcount_2, gene_length, by = c("GeneID")) 
+  
+rpkm <- norm_counts %>% 
+  sweep(., 1, all_info$length_kb, "/")
+
+rpkm
+```
+
+
+#Calculating Z-score for producing heatmaps
+
+```{r}
+vsd <- assay(vst(dds))
+Z-score <- t(scale(t(vsd)))
+```
+
+Then, genes of interest can be selected for plotting using pheatmap. Here an example:
+
+```{r}
+#Z-score-list would represent filtered list of selected genes. 
+pheatmap(Z-score-list, annotation_col = select(info.data, cell, type), show_colnames = FALSE, cluster_cols = FALSE, filename = "Data/Heatmap_cholesterol_cells.pdf")
+```
+
+#Plotting individual genes 
+
+For plotting individual genes, RPKM values were used but data had to be rearranged:
+
+```{r}
+left_join(rpkm,
+          annotation,
+          by = "GeneID") %>% distinct(gene_name, .keep_all = TRUE) -> rpkm
+
+as.data.frame(t(rpkm)) %>% rownames_to_column(var = "samples") -> rpkm
+
+rpkm$cell <- c("Astro", "Astro", "Astro", "D15_NEG", "D15_NEG", "D15_NEG", "D15_POS", "D15_POS", "D15_POS", "D30_POS", "D30_POS", "D30_POS", "D50_NEG", "D50_NEG", "D50_NEG", "D50_POS", "D50_POS", "D50_POS", "smNPC", "smNPC", "smNPC")
+
+rpkm$sort <- c(NA, NA, NA, "neg", "neg", "neg", "pos", "pos", "pos", "pos", "pos", "pos", "neg", "neg", "neg", "pos", "pos", "pos", NA, NA, NA)
+
+rpkm$cell <- factor(rpkm$cell, levels = c("smNPC", "D15_NEG", "D15_POS", "D30_POS", "D50_NEG", "D50_POS", "Astro"))
+```
+
+For plotting and individual gene:
+
+```{r}
+ggplot(rpkm) + 
+  geom_boxplot(aes(x=cell, y= gene_name, fill = sort)) +
+  geom_jitter(aes(x=cell, y= gene_name), alpha = 1) +
+  theme_light() +
+  labs(title = "",
+       x = "",
+       y = "RPKM") +
+  theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5), axis.title.y = element_text(face = "bold")) + expand_limits(y = 0) -> Gene_expression
+
+ggsave(plot = Gene_expression, filename = "Data/Gene_expression.pdf", dpi = 300)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
