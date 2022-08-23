@@ -410,7 +410,7 @@ rpkm$sort <- c(NA, NA, NA, "neg", "neg", "neg", "pos", "pos", "pos", "pos", "pos
 rpkm$cell <- factor(rpkm$cell, levels = c("smNPC", "D15_NEG", "D15_POS", "D30_POS", "D50_NEG", "D50_POS", "Astro"))
 ```
 
-For plotting and individual gene:
+For plotting an individual gene:
 
 ```{r}
 ggplot(rpkm) + 
