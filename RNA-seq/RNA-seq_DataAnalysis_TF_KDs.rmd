@@ -7,7 +7,7 @@ output: html_document
 
 ##Introduction
 
-Analysis of RNA-seq data from TF KD samples. The samples used here were late transduction of shRNA particles for the KD of LBX1, NHLH1 and NR2F1/2 with their corresponding shScramble controls. In addition, there are also early transduction of shRNA for the KD of NR2F1/2 and the corresponding shScramble controls. 
+Analysis of RNA-seq data from TF KD samples. The samples used here were late transduction of shRNA particles for the KD of LBX1, NHLH1 and NR2F1/2 with their corresponding shScramble controls. In addition, there are also early transduction of shRNA for the KD of NR2F1/2 and the corresponding shScramble controls. Each TF KD had 3 replicates and then corresponding shScrambles were included. To match shTF with shScramble, use the date.  
 
 RNA samples were collected at day 15 of differentiation.
 
