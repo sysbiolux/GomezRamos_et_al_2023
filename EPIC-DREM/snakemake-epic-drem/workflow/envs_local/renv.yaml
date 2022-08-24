@@ -1,0 +1,15 @@
+name: renv
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - r-essentials
+  - r-base
+  - bioconductor-rsubread
+  - r-devtools
+  - r-qdaptools
+  - r-annotables
+  - icu=58
+  - lxml
+prefix: /home/users/ndelange/miniconda3/envs/renv
+

@@ -1,0 +1,36 @@
+name: tepic_clean
+channels:
+  - defaults
+  - conda-forge
+  - bioconda
+  - auto
+dependencies:
+  - multiprocessing
+  - llvm-openmp=13.0.1
+  - bedtools=2.28.0
+  - scipy=1.2.1
+  - numpy=1.16.4
+  - twobitreader=3.1.7
+  - libssh2=1.9.0
+  - python=2.7.16
+  - r=3.6.0=r36_0
+  - r-base=3.6.0
+  - r-boot=1.3_20
+  - r-class=7.3_15
+  - r-cluster=2.0.8
+  - r-codetools=0.2_16
+  - r-data.table=1.12.2
+  - r-foreign=0.8_71
+  - r-kernsmooth=2.23_15
+  - r-lattice=0.20_38
+  - r-mass=7.3_51.3
+  - r-matrix=1.2_17
+  - r-mgcv=1.8_28
+  - r-nlme=3.1_139
+  - r-nnet=7.3_12
+  - r-recommended=3.6.0
+  - r-rpart=4.1_15
+  - r-spatial=7.3_11
+  - r-survival=2.44_1.1
+prefix: /home/users/ndelange/miniconda3/envs/tepic_clean
+

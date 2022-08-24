@@ -1,0 +1,5 @@
+channels:
+  - bioconda
+dependencies:
+  - ucsc-fatotwobit
+  - ucsc-twobitinfo

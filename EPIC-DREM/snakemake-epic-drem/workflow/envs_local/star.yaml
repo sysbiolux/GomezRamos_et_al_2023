@@ -1,0 +1,8 @@
+name: star
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - star
+prefix: /home/users/ndelange/miniconda3/envs/star
+

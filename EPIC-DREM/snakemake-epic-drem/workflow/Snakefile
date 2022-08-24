@@ -1,0 +1,48 @@
+DATASETS = ["smNPC", "D15", "D30", "D50"]
+REPLICATES = ["rep1","rep2","rep3"]
+
+configfile: "config/config.yaml"
+
+rule all:
+  input:
+#    test = "data/rna/counts/fc_q30.rds" 
+    drem  = f"data/idrem/drem-model_4splits_dev02.txt",
+    img = "data/atac/visualize/peaks.png",
+#    coverage = "data/atac/coverage/HL60.bw",
+#    heatmap = "data/atac/visualize/heatmap_HL60.png",
+#    filtered = "data/drem-input/test_filtered_tpm.tsv",
+#    summary = "data/rna/qc/bam_summary.npz", 
+#    qc_atac = expand(["data/atac/fastqc/{sample}_{rep}_{read}_fastqc.html"], sample = DATASETS, rep = REPLICATES, read = ["read1", "read2"]),
+#    qc_rna = expand(["data/rna/fastqc/{sample}_{rep}_fastqc.html"], sample = DATASETS, rep = REPLICATES),
+#    pca = "data/rna/qc/pca.png",
+#    corr = "data/rna/qc/heatmap_correlation.png",
+#    mutliqc = "data/multiqc/multiqc_report.html",
+
+
+
+# load rules
+
+include: "rules/qc.smk"
+include: "rules/fastqc.smk"
+#include: "rules/multiqc.smk"
+#include: "rules/bigwig.smk"
+#include: "rules/rseqc.smk"
+#include: "rules/fastq_screen.smk"
+include: "rules/get_rgtdata.smk"
+include: "rules/references.smk"
+include: "rules/prep.smk"
+include: "rules/atac_mapping.smk"
+include: "rules/peak_calling.smk"
+include: "rules/peaks.smk"
+include: "rules/footprinting.smk"
+include: "rules/merge_bam.smk"
+include: "rules/tepic.smk"
+#include: "rules/rna_mapping.smk"
+include: "rules/featureCount.smk"
+#include: "rules/get_tpm.smk"
+include: "rules/old_tpm.smk"
+include: "rules/affinity_prep.smk"
+#include: "rules/drem_deg.smk"
+include: "rules/vizualize.smk"
+include: "rules/idrem.smk"
+

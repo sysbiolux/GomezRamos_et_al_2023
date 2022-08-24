@@ -1,0 +1,44 @@
+__default__:
+  time: "0-01:00:00"
+  partition: "batch"
+  nodes: 1
+  ntasks: 1
+  ncpus: 1
+  job-name: "{rule}"
+  output: "slurm-%j-%x.out"
+  error: "slurm-%j-%x.err"
+fastq_screen:
+  ncpus: 8
+get_rgtgenome:
+  ncpus: 4
+atac_mapping:
+  ncpus: 4
+  time: "0-03:00:00"
+peak_calling:
+  ncpus: 4
+footprinting:
+  time: "0-08:00:00"
+tepic:
+  ncpus: 4
+sortmerna:
+  ncpus: 4
+  time: "0-14:00:00"
+adapter_removal:
+  time: "0-02:00:00"
+rna_index:
+  ncpus: 12
+  time: "0-02:00:00"
+rna_mapping:
+  ncpus: 4
+  time: "0-12:00:00"
+featureCount:
+  ncpus: 4
+  time: "0-04:00:00"
+drem:
+  ncpus: 4
+bwa_index:
+  ncpus: 4
+  time: "0-12:00:00"
+merge_bam:
+  ncpus: 4
+  time: "0-04:00:00"

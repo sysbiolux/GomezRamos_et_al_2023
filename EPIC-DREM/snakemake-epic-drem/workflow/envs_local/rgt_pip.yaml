@@ -1,0 +1,35 @@
+name: rgt_pip
+channels:
+  - defaults
+dependencies:
+  - pip
+  - pip:
+    - biopython==1.76
+    - cycler==0.10.0
+    - cython==0.29.17
+    - fisher==0.1.9
+    - hmmlearn==0.2.2
+    - htseq==0.12.4
+    - joblib==0.14.1
+    - kiwisolver==1.2.0
+    - logomaker==0.8
+    - matplotlib==3.2.1
+    - matplotlib-venn==0.11.5
+    - moods-python==1.9.4.1
+    - mpmath==1.1.0
+    - natsort==7.0.1
+    - numpy==1.18.3
+    - pandas==1.0.3
+    - pybigwig==0.3.17
+    - pyparsing==2.4.7
+    - pysam==0.15.4
+    - python-dateutil==2.8.1
+    - pytz==2019.3
+    - pyvcf==0.6.8
+    - pyx==0.15
+    - rgt==0.13.0
+    - scikit-learn==0.22.2.post1
+    - scipy==1.4.1
+    - six==1.14.0
+prefix: /home/users/ndelange/miniconda3/envs/rgt_pip
+

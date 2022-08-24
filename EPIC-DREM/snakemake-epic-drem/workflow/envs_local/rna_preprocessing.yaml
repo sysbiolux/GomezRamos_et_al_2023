@@ -1,0 +1,9 @@
+name: rna_preprocessing
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - sortmerna
+  - adapterremoval
+prefix: /home/users/ndelange/miniconda3/envs/rna_preprocessing
+

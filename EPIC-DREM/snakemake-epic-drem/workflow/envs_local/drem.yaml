@@ -1,0 +1,8 @@
+name: drem
+channels:
+  - bioconda
+  - defaults
+dependencies:
+  - java-jdk
+prefix: /home/users/ndelange/miniconda3/envs/drem
+
