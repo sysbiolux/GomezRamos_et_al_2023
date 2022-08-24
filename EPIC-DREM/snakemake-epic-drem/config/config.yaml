@@ -1,0 +1,32 @@
+samples: "config/samples.tsv"
+
+
+
+species: "homo_sapiens"
+release: "102"
+genome: "hg38"
+build: "GRCh38"
+alias: "human"
+# for TRAP in TEPIC
+psems: "Homo_sapiens_IDs_PSCM_JASPAR_2018.PSEM"
+
+# specify suffix for paired end reads as in your sample names
+read1: "r1"
+read2: "r2"
+
+# specify your replicates
+reps: ["Rep1", "Rep2", "Rep3"]
+
+# for featureCounts
+strandedness: 2
+
+# peak calling
+genrich:
+  auc: 500
+  
+# TEPIC p-value cutoff. 0.01 recommended for ATAC-seq
+tepic_pval: 0.01
+
+# Paired-end (PE) or single-end (SE)
+endedness: "PE"
+

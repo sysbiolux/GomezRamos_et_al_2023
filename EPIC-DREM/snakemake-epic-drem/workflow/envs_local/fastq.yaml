@@ -1,0 +1,9 @@
+name: fastq
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - fastq-screen
+  - fastqc
+prefix: /home/users/ndelange/miniconda3/envs/fastq
+

@@ -1,0 +1,10 @@
+name: alignment
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - bwa
+  - samtools
+  - bedtools
+prefix: /home/users/ndelange/miniconda3/envs/alignment
+

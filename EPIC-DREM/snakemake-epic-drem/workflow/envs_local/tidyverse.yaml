@@ -1,0 +1,13 @@
+name: tidyverse
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - r-base=4.1.0
+  - r-tidyverse
+  - r-qdaptools
+  - r-annotables
+  - bioconductor-deseq2
+prefix: /home/users/ndelange/miniconda3/envs/tidyverse
+

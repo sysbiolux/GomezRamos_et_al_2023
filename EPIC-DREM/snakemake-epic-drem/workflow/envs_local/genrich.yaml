@@ -1,0 +1,8 @@
+name: genrich
+channels:
+  - defaults
+  - bioconda
+dependencies:
+  - genrich
+prefix: /home/users/ndelange/miniconda3/envs/genrich
+

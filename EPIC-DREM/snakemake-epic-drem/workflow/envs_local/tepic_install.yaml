@@ -1,0 +1,11 @@
+name: tepic_install
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=2.7
+  - llvm-openmp 
+  - r-base
+
+prefix: /home/users/ndelange/miniconda3/envs/tepic_install
+
