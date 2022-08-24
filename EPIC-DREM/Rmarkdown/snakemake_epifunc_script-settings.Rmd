@@ -1,0 +1,834 @@
+---
+title: "Epifunc Snakemake results with settings from the manual run"
+author: ""
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(heatmaply)
+library(tidyverse)
+library(tidyjson)
+library(jsonlite)
+library(plotly)
+library(qdapTools)
+library(gprofiler2)
+library(annotables)
+library(janitor)
+library(cowplot)
+library(DESeq2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(enrichplot)
+library(huxtable)
+
+dir <- "/Users/nikola.delange/drem-results/epifunc/snakemake/old_settings/"
+
+json_drem <- read_file(file.path(dir,"/drem-input/filtered_tpm.tsv_viz/DREM.json"))
+
+json_corrected <- paste0(str_sub(json_drem,6L, -3L),"]")
+write_file(json_corrected, file.path(dir,"drem-input/filtered_tpm.tsv_viz/DREM_corrected.json"))
+
+drem <- jsonlite::read_json(file.path(dir,"drem-input/filtered_tpm.tsv_viz/DREM_corrected.json"))
+tpm <- read_tsv(file.path(dir,"counts/tpm.tsv"))
+
+
+#snakemake@input[["json"]]
+
+#snakemake@input[["genome"]]
+
+genome <- "hg38"
+
+organism <- "hsapiens"
+
+
+#snakemake@input[["organism"]]
+
+
+candidate_list <- tribble(~TF,
+                          "LBX1",
+                          "NHLH1", 
+                          "LMX1A",
+                          "LMX1B",
+                          "EN1",
+                          "NR4A2::RXRA",
+                          "NR4A2",
+                          "NR2F1",
+                          "NR2F2", 
+                          "HOXB2", 
+                          "SOX4")
+
+candidate_list_ext <- tribble(~TF,
+                          "LBX1",
+                          "NHLH1", 
+                          "LMX1A",
+                          "LMX1B",
+                          "EN1",
+                          "NR4A2::RXRA",
+                          "NR4A2", 
+                          "NR2F1",
+                          "NR2F2",
+                          "HOXB2",
+                          "SOX4")
+
+
+
+```
+
+```{r data_preparation}
+
+
+if(genome == "hg38"){
+  genome <- grch38
+  }else if(genome == "hg37"){
+  genome <- grch37
+  }else if(genome == "mm10"){
+  genome <- grcm38
+}
+
+
+model_results <- drem[[1]]
+
+
+sig_tf <- model_results  %>% 
+  spread_all() %>%
+  gather_object() %>% 
+  json_types() %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  filter(name == "ETF") %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  append_values_string("scores") %>% 
+  filter(`array.index.2` %in% c(1,10)) %>% 
+  mutate(info = case_when(`array.index.2` == 1 ~ "TF",
+                          `array.index.2` == 10 ~ "Split Score")) %>%  
+  dplyr::select(parent, nodeID, nodetime, nodeMean, `array.index`, info, scores) %>% 
+  as_tibble() %>% 
+  spread(info,scores) %>% 
+  filter(!is.na(`Split Score`)) %>% 
+  mutate(`Split Score` = as.double(`Split Score`),
+         TF = str_sub(TF, 1L, -3L)) %>% 
+  filter(`Split Score` <= 0.001)
+
+gene_list <- drem[[4]] %>% 
+  append_values_string("GeneID") %>% as_tibble() 
+
+target_genes <- model_results %>% spread_all() %>% 
+  gather_object() %>% 
+  json_types() %>% 
+  filter(name == "genesInNode") %>% 
+  gather_array %>% 
+  append_values_logical("Genes") %>% 
+  left_join(gene_list, by = c("array.index"="document.id")) %>% 
+  filter(Genes)
+
+tp <- model_results %>% spread_all() %>% 
+  as_tibble() %>% distinct(nodetime) %>% pull()
+
+control <- tp[1]
+
+```
+
+```{r numberoftg}
+# all timepoints
+tp <- model_results %>% 
+  spread_all() %>% 
+  as_tibble() %>% 
+  distinct(nodetime) %>% pull()
+
+analysis_tp <- tp[2:(length(tp))]
+
+n_target <- target_genes %>% 
+  dplyr::select(nodeID, GeneID, nodetime) %>% 
+  dplyr::count(nodeID)
+
+nested_genes <- target_genes %>% dplyr::select(nodeID, GeneID) %>% nest(GeneID)
+```
+
+```{r sectionloops}
+section_loop_enrich <- function(node, node_name){
+  
+  cat(sprintf(paste0("### ", node_name, "\n\n")))
+  print(node)
+  cat("\n\n")
+}
+
+
+section_loop_table <- function(node, node_name){
+  
+  cat(sprintf(paste0("### ", node_name, "\n\n")))
+  print(hux(node) %>% 
+      set_bold(1, everywhere)             %>%
+      set_bottom_border(1, everywhere)    %>%
+      set_align(everywhere, 2, 'right')   %>%
+      set_lr_padding(10)                  %>%
+      set_width(0.35))
+  cat("\n\n")
+}
+
+
+
+```
+
+# Model overview
+
+
+```{r}
+
+
+analysis_groups <- nested_genes %>% 
+  group_by(data) %>% 
+  mutate(group_id = factor(cur_group_id())) %>% 
+  ungroup() %>% 
+  dplyr::select(nodeID, group_id) %>% 
+  add_row(nodeID = 0, group_id = factor(0))
+analysis_nodes <- analysis_groups %>% 
+  group_by(group_id) %>% 
+  summarise(analysis_node = min(nodeID)) %>% 
+  pull(analysis_node)
+```
+
+
+```{r drem_model,fig.width=14, fig.height=9}
+
+model_results %>% 
+  spread_all() %>% 
+  as_tibble() %>% 
+  group_by(parent) %>% 
+  mutate(parent_n = n()) %>% 
+  ungroup() -> t
+
+subset <- t %>% filter(nodeID %in% analysis_nodes) %>% 
+  mutate(nodetime = fct_inorder(str_remove(nodetime, "_Macrophage")))
+
+
+
+subset_tf_labels <- sig_tf %>% 
+  mutate(nodeID = factor(nodeID)) %>%
+  filter(TF %in% candidate_list_ext$TF)
+
+top_20 <- model_results  %>% 
+  spread_all() %>%
+  gather_object() %>% 
+  json_types() %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  filter(name == "ETF") %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  append_values_string("scores") %>% 
+  filter(`array.index` < 21) %>% 
+  filter(`array.index.2` %in% c(1,10)) %>% 
+  mutate(info = case_when(`array.index.2` == 1 ~ "TF",
+                          `array.index.2` == 10 ~ "Split Score")) %>%  
+  dplyr::select(parent, nodeID, nodetime, nodeMean, `array.index`, info, scores) %>% 
+  as_tibble() %>% 
+  spread(info,scores) %>% 
+  filter(!is.na(`Split Score`)) %>% 
+  mutate(`Split Score` = as.double(`Split Score`),
+         TF = str_sub(TF, 1L, -3L))
+
+
+  
+candidate_labels <- top_20  %>% 
+  mutate(nodeID = factor(nodeID))  %>%
+  filter(TF %in% candidate_list_ext$TF) %>% 
+  mutate(rank =  paste0("(", array.index, ")")) %>% 
+  group_by(nodeID, nodetime, nodeMean) %>% 
+  dplyr::select(-parent,-array.index,-`Split Score`) %>% 
+  mutate(count = 1:n(), 
+         label = paste0(TF, rank)) %>% 
+  dplyr::select(-rank, -TF) %>% 
+  spread(count, label) %>% 
+  unite("label", 4:6, sep = "\n") %>% 
+  mutate(label = str_remove_all(label, pattern = "\nNA"))
+
+
+
+library(ggrepel)
+
+palette <- c("0" = "#B15928", "1" = "#A6CEE3", "2" = "#1F78B4",
+             "3" = "#B2DF8A", "4" = "#33A02C",
+             "5" = "#FB9A99", "6" = "#E31A1C",
+             "7" = "#FDBF6F", "8" = "#FF7F00",
+             "9" = "#CAB2D6", "10" = "#6A3D9A",
+             "11" = "#FFFF99", "12" = "#B15928",
+             "13" = "#A6CEE3", "14" = "#1F78B4",
+             "15" = "#B2DF8A", "16" = "#33A02C",
+             "17" = "#FB9A99", "18" = "#E31A1C",
+             "19" = "#FDBF6F", "20" = "#FF7F00",
+             "21" = "#CAB2D6", "22" = "#6A3D9A",
+             "23" = "#FFFF99", "24" = "#B15928",
+             "25" = "#A6CEE3", "26" = "#1F78B4",
+             "27" = "#B2DF8A", "28" = "#33A02C",
+             "29" = "#FB9A99", "30" = "#E31A1C",
+             "31" = "#FDBF6F", "32" = "#FF7F00",
+             "33" = "#CAB2D6", "34" = "#6A3D9A",
+             "35" = "#FFFF99", "36" = "#B15928",
+             "37" = "#A6CEE3", "38" = "#1F78B4",
+             "39" = "#B2DF8A", "40" = "#33A02C",
+             "41" = "#FB9A99", "42" = "#E31A1C",
+             "43" = "#FDBF6F", "44" = "#FF7F00",
+             "45" = "#CAB2D6", "46" = "#6A3D9A",
+             "47" = "#FFFF99", "48" = "#B15928")
+
+# very complicated way to create the graph..
+# TODO: try geom_segment for coloring
+nodes <- model_results %>% 
+  spread_all() %>% 
+  as_tibble() %>% 
+  left_join(analysis_groups, by = c("nodeID" = "nodeID")) %>% 
+  mutate(nodetime = fct_inorder(str_remove(nodetime, "_Macrophage")))
+
+model_results %>% 
+  spread_all() %>% 
+  as_tibble() %>% 
+  mutate(parent_index = parent + 1,
+         parent_nodeMean = c(0, nodeMean[parent_index]),
+         group = 1:n(),
+         nodetime = fct_inorder(str_remove(nodetime, "_Macrophage")),
+         parent_nodetime = fct_c(as_factor(NA), nodetime[parent_index])) %>% 
+  gather(node,nodeMean, -document.id, -parent, -nodeID, -nodetime, -nodeSigma, -parent_index, -group, -parent_nodetime) %>% 
+  mutate(nodetime = case_when(node == "parent_nodeMean" ~ parent_nodetime,
+                              TRUE ~ nodetime)) %>%  
+  filter(!is.na(nodetime)) %>% 
+  mutate(node_id = case_when(nodetime == tp[length(tp)] ~ nodeID,
+                             TRUE ~ parent)) %>% 
+  left_join(n_target, by = c("node_id" = "nodeID")) %>%
+  mutate(n = case_when(node_id < 1 ~ length(gene_list$GeneID),
+                       TRUE ~ n)) %>% 
+  dplyr::rename(`No. target genes` = n)%>% 
+  left_join(analysis_groups, by = c("nodeID" = "nodeID")) %>% 
+  ggplot(aes(x = nodetime, y = nodeMean, , label = group_id)) +
+  geom_point(data = nodes, aes(x = nodetime, y = nodeMean, color = group_id)) + 
+  geom_line(aes(group = group, color = group_id)) + 
+  scale_color_manual(values = palette) + 
+  geom_text_repel(data = subset,
+                  aes(label = nodeID),
+                  size = 5,
+                  nudge_x = 0.01,
+                  nudge_y = 0.01) +
+  geom_label_repel(data = candidate_labels,
+             aes(label = label), 
+             size = 4,
+             nudge_x = - 0.1,
+             hjust = 0, direction="y") +
+  ylab("Log2FC") +
+  theme(legend.position = "none",
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 18), 
+        panel.background = element_rect(fill = "white"),
+        line = element_line(size = 3))
+# -> model_plot
+
+# ggsave("~/drem-results/epifunc/snakemake/old_settings/overview.pdf", model_plot, dpi = 300, width = 14, height = 9)
+
+
+### coloring according to groups
+## groups according to similarity
+
+```
+
+
+
+
+```{r, include = FALSE}
+
+model_results %>% 
+  spread_all() %>% 
+  as_tibble() %>% 
+  group_by(parent) %>% 
+  mutate(parent_n = n()) %>% 
+  ungroup() -> t
+
+t %>% inner_join(t, by = c("nodeID" = "parent"), 
+                 suffix = c("_parent", "_child")) %>% 
+  mutate(d_group =0 ) %>% 
+  dplyr::select(-contains(c("Sigma", "document") )) %>% 
+  relocate(contains(c("nodeID", "nodetime", "nodeMean", "parent_n_parent") ))-> parent_child
+
+gid <- 1
+filter(parent_child, d_group == 0) %>% 
+  pull(nodeID_child) %>% max -> c_child
+
+while(c_child > 0) {
+  # print(paste0(c_child, " ", gid))
+  parent_child[which(parent_child$nodeID_child == c_child), 
+                 "d_group"] <- gid
+  
+  if(parent_child[which(parent_child$nodeID_child == c_child), 
+                  "parent_n_child"] >1){
+            
+      gid <- gid + 1 # increase  current group and
+      c_child <- filter(parent_child, d_group ==0) %>% # restart
+      pull(nodeID_child) %>% max
+  } else{ # c_child == 1
+    c_child <- pull(parent_child[which(parent_child$nodeID_child == c_child), "nodeID"])
+  }
+    }
+# restart with highest node where d_group is still 0
+
+
+```
+
+
+
+
+
+```{r, include=FALSE, eval=FALSE}
+distinct(parent_child, nodetime_parent) |> 
+  add_row(nodetime_parent = tp[length(tp)]) |>
+  mutate(start = row_number()) -> indices
+
+
+
+parent_child |>
+  # Reducing the number of groups by 
+  # giving all groups of lenght 1 the same group to colour
+  group_by(d_group) %>% 
+  mutate(d_group = ifelse(n() ==1, 1 , d_group)) %>% 
+  ungroup() |> 
+  left_join(indices) |> 
+  left_join(rename(indices, end = start, nodetime_child = nodetime_parent) ) |> 
+  left_join(analysis_groups, by = c("nodeID" = "nodeID")) %>% 
+  ggplot()  +
+  geom_point(aes(x = start, y = nodeMean_parent, color = group_id)) +
+  geom_segment(aes(x = end , 
+                   xend = start, 
+                   y = nodeMean_child , 
+                   yend = nodeMean_parent,
+                   colour=group_id)) +
+    scale_x_continuous(labels = indices$nodetime_parent, breaks = 1:length(tp)) -> p
+
+ggplotly(p)
+# TODO: Set better colors
+```
+
+
+
+
+```{r splitscore, fig.width=7, fig.height=5}
+subset_tf <- top_20 %>% 
+  mutate(nodeID = factor(nodeID)) %>%
+  filter(TF %in% candidate_list_ext$TF) %>% 
+  filter(array.index < 21) %>% 
+  mutate(Rank = factor(array.index)) 
+
+top_20 %>% 
+  mutate(Score = -log2(`Split Score`),
+         Rank = factor(array.index)) %>% 
+  group_by(nodeID) %>% 
+  left_join(analysis_groups, by = c("nodeID" = "nodeID")) %>% 
+  mutate(nodeID = factor(nodeID),
+         Rank = fct_rev(Rank)) %>%
+  ggplot(aes(y = nodeID, x = Rank)) + 
+  geom_point(aes(color = group_id, size = Score)) + 
+  geom_text_repel(data = subset_tf, aes(label = TF)) +
+  scale_color_manual(values = palette) +
+  theme(legend.position = "top",
+        axis.text = element_text(size = 14),
+        axis.title = element_text(size = 18), 
+        panel.background = element_rect(fill = "white")) +
+  guides(fill = FALSE, 
+           color = FALSE, 
+           shape = FALSE)  -> annotated_tf
+
+```
+
+```{r, fig.width=14, fig.height=8}
+plot_grid(model_plot, annotated_tf, labels = c("A", "B"), rel_widths = c(2, 1)) 
+```
+
+## Interactive 
+
+```{r splitscore_interactive}
+ggplotly(sig_tf %>% 
+  group_by(nodeID) %>% 
+  mutate(nodetime = fct_relevel(nodetime, analysis_tp)) %>% 
+    left_join(analysis_groups, by = c("nodeID" = "nodeID")) %>% 
+  ggplot(aes(x = nodeID, y = -log(`Split Score`), text = paste("TF:", TF), label = `Split Score`, color = group_id)) + 
+  geom_point()  +
+  scale_color_manual(values = palette) +
+    theme(legend.position = "none")) 
+```
+
+## Significant Regulators {.tabset .tabset-fade}
+
+```{r}
+top30 <- sig_tf %>% 
+  group_by(nodeID) %>% 
+  filter(array.index < 31) %>% 
+  dplyr::select(nodeID, array.index, TF, `Split Score`) %>% 
+  dplyr::rename(Rank = array.index) %>% 
+  nest() 
+
+top30_list <- top30$data
+names(top30_list) <- paste("NodeID:", top30$nodeID)
+
+```
+
+```{r results='asis'}
+
+map2(top30_list, names(top30_list), section_loop_table)
+
+```
+
+
+```{r eval=FALSE}
+all_res <- resultsNames(dds)[2:length(resultsNames(dds))]
+
+deg <- map(all_res, function(x){
+ res <-  results(dds, name=x) 
+ res_ord <- res[order(res$pvalue),]
+ as_tibble(subset(res_ord, padj < 0.05), rownames = "GeneID")
+})
+
+
+names(deg) <- tp[2:length(tp)]
+
+list_tg <- target_genes %>% dplyr::select(GeneID, nodetime, nodeID) %>% group_by(nodetime) %>% nest() %>% pull(data) 
+
+names(list_tg) <- target_genes %>% dplyr::select(GeneID, nodetime, nodeID) %>% group_by(nodetime) %>% nest() %>% pull(nodetime)
+
+deg <- deg[names(list_tg)]
+
+deg_targets <- map2(deg, list_tg, function(deg, tg){
+  deg %>% dplyr::select(GeneID) %>% left_join(tg)
+}) %>% list_df2df() %>% dplyr::rename(nodetime = X1)
+```
+
+
+
+## clusterProfiler GO enrichment node TG {.tabset .tabset-fade}
+
+```{r cache=TRUE}
+
+nested_tg <- target_genes %>% filter(nodeID %in% analysis_nodes) %>% group_by(nodeID) %>% nest() 
+
+list_tg_node <- pull(nested_tg, data)
+
+names(list_tg_node) <- paste("NodeID:", nested_tg$nodeID)
+
+go_tg <- map(list_tg_node, function(x){enrichGO(gene         = x$GeneID,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05, readable = TRUE)})
+
+non_empty_go_node <- map(go_tg, function(go){dim(go)[1]}) %>% list2df() %>% dplyr::filter(X1 > 1) %>% 
+  pull(X2)
+
+go_tg_filtered <- go_tg[non_empty_go_node]
+
+```
+
+```{r, fig.height=9, fig.width=6, results='asis'}
+go_tg_filtered_plot <- map(go_tg_filtered, function(x){dotplot(x, showCategory=8)})
+map2(go_tg_filtered_plot, names(go_tg_filtered_plot), section_loop_enrich) -> automatic_go
+
+```
+
+
+## GO TF {.tabset .tabset-fade}
+
+```{r, include=FALSE, eval=FALSE}
+sig_tf_go <- sig_tf %>% filter(nodeID %in% analysis_nodes)
+## add proper GO enrichment
+
+GOnodes <- sig_tf_go %>% 
+  dplyr::select(nodeID, TF) %>% 
+  group_by(nodeID) %>% 
+  summarise(gost_plot = case_when(is_null(gost(TF, organism = organism, sources = c("GO:BP"))) ~ 0,
+                                  TRUE ~ 1)) %>% 
+  filter(gost_plot == 1) %>% pull(nodeID)
+
+GOtg<- sig_tf_go %>% 
+  dplyr::select(nodeID, TF) %>% 
+  filter(nodeID %in% GOnodes) %>% 
+  group_by(nodeID) %>% 
+  summarise(gost_plot = gost(TF, organism = organism, sources = c("GO:BP")))
+  
+
+
+GOtables_tf <- GOtg %>% 
+  group_by(nodeID) %>% 
+  mutate(count = 1:n()) %>% 
+  filter(count == 1) %>% 
+  dplyr::select(-count) %>% 
+  summarise(as_tibble(gost_plot$result)) %>% 
+  nest()
+  
+
+list_tables_tf <- GOtables_tf %>% 
+  pull(data)
+
+
+names(list_tables_tf) <- paste("NodeID:", unique(GOtables_tf$nodeID))
+
+list_tables_tf
+```
+
+```{r }
+nested_tf <- sig_tf %>% filter(nodeID %in% analysis_nodes) %>% group_by(nodeID) %>% nest() 
+
+list_tf<- pull(nested_tf, data)
+
+names(list_tf) <- paste("NodeID:", nested_tf$nodeID)
+
+
+
+go_tf <- map(list_tf, function(x){enrichGO(gene         = x$TF,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'SYMBOL',
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)})
+
+non_empty_go_tf <- map(go_tf, function(go){dim(go)[1]}) %>% list2df() %>% dplyr::filter(X1 > 1) %>% 
+  pull(X2)
+
+go_tf_filtered <- go_tf[non_empty_go_tf]
+
+```
+
+```{r fig.height=8, fig.width=6, results='asis'}
+go_tf_plot <- map(go_tf_filtered, function(x){dotplot(x, showCategory=8)})
+map2(go_tf_plot, names(go_tf_plot), section_loop_enrich) -> automatic_go
+```
+
+# TF 
+
+```{r TF_on_several_nodes}
+# TF on several nodes and timepoints (heatmap like)
+# arrange total number
+# split score cut-off? 
+# Too many included in graphic
+list_sig_several <- sig_tf %>% filter(`Split Score` < 0.0005) %>% dplyr::count(TF) 
+sig_tf %>% 
+  left_join(list_sig_several) %>% 
+  filter(n>2) %>% 
+  group_by(nodetime) %>% 
+  dplyr::count(TF) %>% 
+  mutate(count = fct_inorder(as.character(n))) %>% 
+  dplyr::select(-n) %>% 
+  left_join(list_sig_several) %>% 
+  spread(nodetime, count) %>% 
+  arrange(desc(n)) %>% 
+  mutate(TF = fct_inorder(TF)) %>% 
+  dplyr::rename(total = n) %>% 
+  gather(nodetime, count, -TF) %>% 
+  mutate(count = tidyr::replace_na(count, "0")) %>% 
+  mutate(nodetime = fct_relevel(nodetime, analysis_tp)) -> several_tf
+  several_tf %>% ggplot(aes(x=nodetime, y=TF, fill = count)) + 
+  geom_tile() + 
+  scale_fill_brewer(palette = 8) + 
+  theme_classic() -> count_plot
+```
+
+```{r}
+
+# take care of (var..)...
+# how to handle dimers? split and include individually
+# change palette 
+
+t0 <- as.symbol(control)
+
+expr_sig <- sig_tf %>% 
+  left_join(list_sig_several) %>% 
+  filter(n>2) %>% 
+  mutate(nodetime = fct_inorder(nodetime)) %>% 
+  distinct(TF) %>% 
+  mutate(TF_vars = TF) %>%
+    mutate(TF_vars = case_when(str_detect(TF_vars, "var") ~ str_sub(TF_vars,1L, -8L),
+                               TRUE ~ TF_vars),
+           TF_dimers = TF_vars) %>% 
+    separate(TF_vars, into = c("dimer1", "dimer2"), sep = "::") %>% 
+  gather(dimer, TF_sep, dimer1, dimer2) %>% 
+  filter(!is.na(TF_sep)) %>% 
+  left_join(tpm %>% left_join(genome %>% dplyr::select(ensgene, symbol), by = c("GeneID"="ensgene")) %>% 
+              dplyr::select(symbol, everything(), -GeneID), by = c("TF_sep"="symbol"))
+
+
+norm_expr <- sig_tf %>% 
+  left_join(list_sig_several) %>% 
+  filter(n>2) %>% 
+  mutate(nodetime = fct_inorder(nodetime)) %>% 
+  distinct(TF) %>% 
+  mutate(TF_vars = TF) %>%
+    mutate(TF_vars = case_when(str_detect(TF_vars, "var") ~ str_sub(TF_vars,1L, -8L),
+                               TRUE ~ TF_vars),
+           TF_dimers = TF_vars) %>% 
+    separate(TF_vars, into = c("dimer1", "dimer2"), sep = "::") %>% 
+  gather(dimer, TF_sep, dimer1, dimer2) %>% 
+  filter(!is.na(TF_sep)) %>% 
+  left_join(tpm %>% left_join(genome %>% dplyr::select(ensgene, symbol), by = c("GeneID"="ensgene")) %>% 
+              dplyr::select(symbol, everything(), -GeneID), by = c("TF_sep"="symbol")) %>% 
+  mutate(TF = case_when(TF_dimers == TF_sep ~ TF, 
+                        TRUE ~ paste0(TF_sep, " (", TF, ")" ))) %>% 
+  dplyr::select(-TF_dimers, -dimer, -TF_sep) %>% 
+  mutate(across(.cols = one_of(tp), ~ .x + 1)) %>% 
+  mutate(across(.cols = c(everything(),-TF), ~ log2(.x/ !! t0))) %>% 
+  dplyr::select(-t0)
+
+
+norm_expr <- norm_expr %>% 
+  map_dfc(function(x){replace(x, is.infinite(x), 0)}) %>% 
+  map_dfc(function(x){replace(x, is.nan(x), 0)})
+
+norm_expr %>% 
+  gather(Timepoint, Log2FC, -TF) %>% 
+  mutate(Timepoint = fct_inorder(Timepoint)) %>% 
+  ggplot(aes(y = TF, x = Timepoint, fill = Log2FC)) + 
+  geom_tile() + scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) -> log2fc
+
+```
+
+```{r}
+plot_grid(count_plot, log2fc, labels = c("A", "B")) 
+```
+
+
+```{r sign_tf_expression}
+sig_tf_expression <- sig_tf %>% 
+  left_join(tpm %>% left_join(genome %>% dplyr::select(ensgene, symbol), by = c("GeneID"="ensgene")) %>% 
+              dplyr::select(symbol, everything(), -GeneID), by = c("TF"="symbol")) %>% 
+  dplyr::select(-parent, -nodetime, -nodeMean, -array.index, -`Split Score`, -nodeID) %>% 
+  na.omit() %>% 
+  distinct
+
+
+
+
+```
+
+
+# TF Expression (z-score)
+
+
+```{r, fig.height=11}
+z_score <- function(sig_tf){
+  z_score <- function(x) (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+ scaled <- sig_tf %>% mutate_if(is.numeric, z_score) %>% dplyr::select(-TF) %>% as.matrix()
+ rownames(scaled) <-  sig_tf$TF
+ heatmaply(scaled, Colv = FALSE)
+}
+
+
+z_score(sig_tf_expression)
+
+```
+
+
+
+
+
+```{r include=FALSE}
+all_tf <- model_results  %>% 
+  spread_all() %>%
+  gather_object() %>% 
+  json_types() %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  filter(name == "ETF") %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  append_values_string("scores") %>% 
+  filter(`array.index.2` %in% c(1,10)) %>% 
+  mutate(info = case_when(`array.index.2` == 1 ~ "TF",
+                          `array.index.2` == 10 ~ "Split Score")) %>%  
+  dplyr::select(parent, nodeID, nodetime, nodeMean, `array.index`, info, scores) %>% 
+  as_tibble() %>% 
+  spread(info,scores) %>% 
+  dplyr::select(nodeID, TF, nodetime, array.index)
+
+best_tp_ranking <- all_tf %>% group_by(TF, nodetime) %>% summarise(min(array.index)) %>% 
+  spread(nodetime, `min(array.index)`) %>% 
+  dplyr::select(TF, analysis_tp)
+
+all_tf %>% group_by(TF, nodetime) %>% summarise(min(array.index)) %>%  mutate(ranking = `min(array.index)`) %>% ggplot(aes(x = ranking)) + geom_bar()
+
+best_tp_ranking %>% gather(nodetime, ranking, -TF) %>% summarise(mean_ranking = round(mean(ranking))) %>% ggplot(aes(x = mean_ranking)) + geom_bar()
+
+```
+
+
+# TF rankings
+
+```{r, fig.cap="TF min rankings for each time point"}
+all_tf <- model_results  %>% 
+  spread_all() %>%
+  gather_object() %>% 
+  json_types() %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  filter(name == "ETF") %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  append_values_string("scores") %>% 
+  filter(`array.index.2` %in% c(1,10)) %>% 
+  mutate(info = case_when(`array.index.2` == 1 ~ "TF",
+                          `array.index.2` == 10 ~ "Split Score")) %>%  
+  dplyr::select(parent, nodeID, nodetime, nodeMean, `array.index`, info, scores) %>% 
+  as_tibble() %>% 
+  spread(info,scores) %>% 
+  dplyr::select(nodeID, TF, nodetime, array.index)
+
+best_tp_ranking <- all_tf %>% group_by(TF, nodetime) %>% summarise(min(array.index)) %>% 
+  spread(nodetime, `min(array.index)`) %>% 
+  dplyr::select(TF, analysis_tp)
+
+all_tf %>% group_by(TF, nodetime) %>% summarise(min(array.index)) %>%  mutate(ranking = `min(array.index)`) %>% ggplot(aes(x = ranking)) + geom_bar()
+```
+
+```{r, fig.cap="TF average ranking over all time points"}
+best_tp_ranking %>% gather(nodetime, ranking, -TF) %>% summarise(mean_ranking = mean(ranking)) %>% ggplot(aes(x = mean_ranking)) + geom_bar()
+
+```
+
+# Ranking of interesting TF
+
+```{r}
+
+  
+candidate_list %>% left_join(best_tp_ranking %>% mutate(TF = str_sub(TF,1L, -3L))) %>% huxtable::hux()
+
+```
+
+```{r}
+candidate_list %>% left_join(all_tf %>% mutate(TF = str_sub(TF,1L, -3L))) %>% group_by(TF) %>% summarise(array.index = min(array.index)) -> min_ranking
+
+min_ranking %>% left_join(candidate_list %>% left_join(all_tf %>% mutate(TF = str_sub(TF,1L, -3L)))) %>% rename(Ranking = array.index) -> min_ranking_path
+huxtable::hux(min_ranking_path)
+```
+
+```{r}
+all_tf <- model_results  %>% 
+  spread_all() %>%
+  gather_object() %>% 
+  json_types() %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  filter(name == "ETF") %>% 
+  filter(is_json_array(.)) %>% gather_array %>% 
+  append_values_string("scores") %>% 
+  filter(`array.index.2` %in% c(1,10)) %>% 
+  mutate(info = case_when(`array.index.2` == 1 ~ "TF",
+                          `array.index.2` == 10 ~ "Split Score")) %>%  
+  dplyr::select(parent, nodeID, nodetime, nodeMean, `array.index`, info, scores) %>% 
+  as_tibble() %>% 
+  spread(info,scores) %>% 
+  filter(!is.na(`Split Score`)) %>% 
+  mutate(`Split Score` = as.double(`Split Score`),
+         TF = str_sub(TF, 1L, -3L))
+
+
+all_tf %>% 
+  dplyr::select(-parent, nodeMean) %>% 
+  unite("label", nodetime, nodeID,  sep = " - Node ") %>% 
+  rename(Rank = array.index) %>% 
+  dplyr::select(label, Rank, TF, `Split Score`) %>% 
+  group_by(label) %>% 
+  nest() -> all_tf_list
+
+list_by_node <-  all_tf_list$data
+names(list_by_node) <- all_tf_list$label
+
+library(openxlsx)
+# write.xlsx(list_by_node, "/Volumes/Secomba/nikola.delange/Boxcryptor/ownCloud/epifunc_epicdrem/Manuscript_FinalInfo/ranking_tf/ranking_all-tf.xlsx")
+```
+
