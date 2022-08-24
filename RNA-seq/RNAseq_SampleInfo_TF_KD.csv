@@ -1,0 +1,45 @@
+fastq_file,name,description,date,gender,coriell_ID
+20210403_D15_Late_LBX1_EFPFU_SB_S69_R1_001.fastq.gz,Neurons_day15_LBX1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting LBX1,20210403,female,GM17602
+20210403_D15_Late_LBX1_EFPFU_SB_S69_R2_001.fastq.gz,,,,female,GM17602
+20210403_D15_Late_Scramble_EFPFU_SB_S70_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210403,female,GM17602
+20210403_D15_Late_Scramble_EFPFU_SB_S70_R2_001.fastq.gz,,,,female,GM17602
+20210407_D15_Late_LBX1_EFPFU_SB_S71_R1_001.fastq.gz,Neurons_day15_LBX1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting LBX1,20210407,female,GM17602
+20210407_D15_Late_LBX1_EFPFU_SB_S71_R2_001.fastq.gz,,,,female,GM17602
+20210407_D15_Late_Scramble_EFPFU_SB_S72_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210407,female,GM17602
+20210407_D15_Late_Scramble_EFPFU_SB_S72_R2_001.fastq.gz,,,,female,GM17602
+20210413_D15_Late_LBX1_EFPFU_SB_S73_R1_001.fastq.gz,Neurons_day15_LBX1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting LBX1,20210413,female,GM17602
+20210413_D15_Late_LBX1_EFPFU_SB_S73_R2_001.fastq.gz,,,,female,GM17602
+20210413_D15_Late_Scramble_EFPFU_SB_S74_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210413,female,GM17602
+20210413_D15_Late_Scramble_EFPFU_SB_S74_R2_001.fastq.gz,,,,female,GM17602
+20210602_D15_Late_NHLH1_EFPFU_SB_S75_R1_001.fastq.gz,Neurons_day15_NHLH1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting NHLH1,20210602,female,GM17602
+20210602_D15_Late_NHLH1_EFPFU_SB_S75_R2_001.fastq.gz,,,,female,GM17602
+20210602_D15_Late_Scramble_EFPFU_SB_S76_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210602,female,GM17602
+20210602_D15_Late_Scramble_EFPFU_SB_S76_R2_001.fastq.gz,,,,female,GM17602
+20210615_D15_Late_NR2Fs_EFPFU_SB_S78_R1_001.fastq.gz,Neurons_day15_Late_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNAs targeting NR2F1 and NR2F2 ,20210615,female,GM17602
+20210615_D15_Late_NR2Fs_EFPFU_SB_S78_R2_001.fastq.gz,,,,female,GM17602
+20210615_D15_Late_Scramble_EFPFU_SB_S79_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210615,female,GM17602
+20210615_D15_Late_Scramble_EFPFU_SB_S79_R2_001.fastq.gz,,,,female,GM17602
+20210615_D15_NR2Fs_EFPFU_SB_S80_R1_001.fastq.gz,Neurons_day15_Early_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a shRNAs targeting NR2F1 and NR2F2 ,20210615,female,GM17602
+20210615_D15_NR2Fs_EFPFU_SB_S80_R2_001.fastq.gz,,,,female,GM17602
+20210615_D15_Scramble_EFPFU_SB_S81_R1_001.fastq.gz,Neurons_day15_Early_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a scramble shRNA,20210615,female,GM17602
+20210615_D15_Scramble_EFPFU_SB_S81_R2_001.fastq.gz,,,,female,GM17602
+20210619_D15_Late_NHLH1_EFPFU_SB_S82_R1_001.fastq.gz,Neurons_day15_NHLH1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting NHLH1,20210619,female,GM17602
+20210619_D15_Late_NHLH1_EFPFU_SB_S82_R2_001.fastq.gz,,,,female,GM17602
+20210619_D15_Late_NR2Fs_EFPFU_SB_S83_R1_001.fastq.gz,Neurons_day15_Late_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNAs targeting NR2F1 and NR2F2 ,20210619,female,GM17602
+20210619_D15_Late_NR2Fs_EFPFU_SB_S83_R2_001.fastq.gz,,,,female,GM17602
+20210619_D15_Late_Scramble_EFPFU_SB_S84_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210619,female,GM17602
+20210619_D15_Late_Scramble_EFPFU_SB_S84_R2_001.fastq.gz,,,,female,GM17602
+20210619_D15_NR2Fs_EFPFU_SB_S86_R1_001.fastq.gz,Neurons_day15_Early_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a shRNAs targeting NR2F1 and NR2F2 ,20210619,female,GM17602
+20210619_D15_NR2Fs_EFPFU_SB_S86_R2_001.fastq.gz,,,,female,GM17602
+20210619_D15_Scramble_EFPFU_SB_S87_R1_001.fastq.gz,Neurons_day15_Early_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a scramble shRNA,20210619,female,GM17602
+20210619_D15_Scramble_EFPFU_SB_S87_R2_001.fastq.gz,,,,female,GM17602
+20210623_D15_Late_NHLH1_EFPFU_SB_S88_R1_001.fastq.gz,Neurons_day15_NHLH1_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNA targeting NHLH1,20210623,female,GM17602
+20210623_D15_Late_NHLH1_EFPFU_SB_S88_R2_001.fastq.gz,,,,female,GM17602
+20210623_D15_Late_NR2Fs_EFPFU_SB_S89_R1_001.fastq.gz,Neurons_day15_Late_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a shRNAs targeting NR2F1 and NR2F2 ,20210623,female,GM17602
+20210623_D15_Late_NR2Fs_EFPFU_SB_S89_R2_001.fastq.gz,,,,female,GM17602
+20210623_D15_Late_Scramble_EFPFU_SB_S90_R1_001.fastq.gz,Neurons_day15_Late_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 9 with a scramble shRNA,20210623,female,GM17602
+20210623_D15_Late_Scramble_EFPFU_SB_S90_R2_001.fastq.gz,,,,female,GM17602
+20210623_D15_NR2Fs_EFPFU_SB_S92_R1_001.fastq.gz,Neurons_day15_Early_NR2Fs_KD,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a shRNAs targeting NR2F1 and NR2F2 ,20210623,female,GM17602
+20210623_D15_NR2Fs_EFPFU_SB_S92_R2_001.fastq.gz,,,,female,GM17602
+20210623_D15_Scramble_EFPFU_SB_S93_R1_001.fastq.gz,Neurons_day15_Early_Scramble,iPSC-derived neurons at day 15 of differentiation transduced at day 1 with a scramble shRNA,20210623,female,GM17602
+20210623_D15_Scramble_EFPFU_SB_S93_R2_001.fastq.gz,,,,female,GM17602

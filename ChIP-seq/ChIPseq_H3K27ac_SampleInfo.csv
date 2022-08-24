@@ -1,0 +1,27 @@
+fastq_file,name,description,replicate,gender,coriell_ID
+HFFTHmCherry_D30pos_H3K27ac_Ind13_Lasse_S7_R1_001.fastq.gz,ChIP_H3K27ac_mDAN_day30,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 30 of differentiation,1,female,GM17602
+HFFTHmCherry_D30pos_H3K27ac_Ind13_Lasse_S7_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D30pos_input_Ind14_Lasse_S8_R1_001.fastq.gz,ChIP_Input_mDAN_day30,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 30 of differentiation,1,female,GM17602
+HFFTHmCherry_D30pos_input_Ind14_Lasse_S8_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D31pos_H3K27ac_Ind5_Lasse_S1_R1_001.fastq.gz,ChIP_H3K27ac_mDAN_day30,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 30 of differentiation,2,female,GM17602
+HFFTHmCherry_D31pos_H3K27ac_Ind5_Lasse_S1_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D31pos_input_Ind6_Lasse_S2_R1_001.fastq.gz,ChIP_Input_mDAN_day30,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 30 of differentiation,2,female,GM17602
+HFFTHmCherry_D31pos_input_Ind6_Lasse_S2_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D49neg_H3K27ac_Ind8_Lasse_S5_R1_001.fastq.gz,ChIP_H3K27ac_Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,1,female,GM17602
+HFFTHmCherry_D49neg_H3K27ac_Ind8_Lasse_S5_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D49neg_input_Ind12_Lasse_S6_R1_001.fastq.gz,ChIP_Input_Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,1,female,GM17602
+HFFTHmCherry_D49neg_input_Ind12_Lasse_S6_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D49pos_H3K27ac_Ind7_Lasse_S3_R1_001.fastq.gz,ChIP_H3K27ac_mDAN_day50,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,1,female,GM17602
+HFFTHmCherry_D49pos_H3K27ac_Ind7_Lasse_S3_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D49pos_input_Ind9_Lasse_S4_R1_001.fastq.gz,ChIP_Input_mDAN_day50,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,1,female,GM17602
+HFFTHmCherry_D49pos_input_Ind9_Lasse_S4_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D51neg_H3K27ac_Ind16_Lasse_S11_R1_001.fastq.gz,ChIP_H3K27ac_Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,2,female,GM17602
+HFFTHmCherry_D51neg_H3K27ac_Ind16_Lasse_S11_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D51neg_input_Ind19_Lasse_S12_R1_001.fastq.gz,ChIP_Input_Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,2,female,GM17602
+HFFTHmCherry_D51neg_input_Ind19_Lasse_S12_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D51pos_H3K27ac_Ind15_Lasse_S9_R1_001.fastq.gz,ChIP_H3K27ac_mDAN_day50,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,2,female,GM17602
+HFFTHmCherry_D51pos_H3K27ac_Ind15_Lasse_S9_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_D51pos_input_Ind18_Lasse_S10_R1_001.fastq.gz,ChIP_Input_mDAN_day50,FACS mCherry+ sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,2,female,GM17602
+HFFTHmCherry_D51pos_input_Ind18_Lasse_S10_R2_001.fastq.gz,,,,female,GM17602
+HFFTHmCherry_smNPC_ChIP_H3K27ac_Ind4_Lasse_S17_R1_001.fastq.gz,ChIP_H3K27ac_smNPC,iPSC-derived neural precursor cell,1,female,GM17602
+HFFTHmCherry_smNPC_ChIP_H3K27ac_Ind4_Lasse_S17_R2_001.fastq.gz,,,,female,GM17602

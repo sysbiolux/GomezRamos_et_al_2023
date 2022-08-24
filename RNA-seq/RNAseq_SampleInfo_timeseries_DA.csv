@@ -1,0 +1,22 @@
+fastq_file,name,description,date,gender,coriell_ID
+HFFposTH2AmCherry_D15_possort_20190213_S11_R1_001.fastq.gz,mDAN_day15,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 15 of differentiation,20190213,female,GM17602
+HFFposTH2AmCherry_D15_possort_20190228_S13_R1_001.fastq.gz,mDAN_day15,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 15 of differentiation,20190228,female,GM17602
+HFFposTH2AmCherry_D30_possort_20190228_S12_R1_001.fastq.gz,mDAN_day30,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 30 of differentiation,20190228,female,GM17602
+HFFposTH2AmCherry_smNPC_20190312_S14_R1_001.fastq.gz,smNPC,iPSC-derived neural precursor cell,20190312,female,GM17602
+HFFTHmCherry_ASTRO_D65_2019-04-26_Lasse_S9_R1_001.fastq.gz,Astrocytes_day65,iPCS-derived astrocytes at day 65 of differentiation,20190426,female,GM17602
+HFFTHmCherry_ASTRO_D65_II_2019-05-07_Lasse_S10_R1_001.fastq.gz,Astrocytes_day65,iPCS-derived astrocytes at day 65 of differentiation,20190507,female,GM17602
+HFFTHmCherry_ASTRO_D65_III_2019-05-10_Lasse_S11_R1_001.fastq.gz,Astrocytes_day65,iPCS-derived astrocytes at day 65 of differentiation,20190510,female,GM17602
+HFFTHmCherry_D50_negsort_20190626_Lasse_S15_R1_001.fastq.gz,Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,20190626,female,GM17602
+HFFTHmCherry_D50_negsort_20190717_Lasse_S14_R1_001.fastq.gz,Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,20190717,female,GM17602
+HFFTHmCherry_D50_possort_20190612_Lasse_S11_R1_001.fastq.gz,mDAN_day50,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 50 of differentiation,20190612,female,GM17602
+HFFTHmCherry_D50_possort_20190717_Lasse_S13_R1_001.fastq.gz,mDAN_day50,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 50 of differentiation,20190717,female,GM17602
+HFFTHmCherry_NESC_2019-03-19_Lasse_S12_R1_001.fastq.gz,smNPC,iPSC-derived neural precursor cell,20190319,female,GM17602
+HFFTHmCherry_NESC_2019-03-22_Lasse_S13_R1_001.fastq.gz,smNPC,iPSC-derived neural precursor cell,20190322,female,GM17602
+HFFTHmCherry_neurons_NEG_D15_2019-03-12_Lasse_S1_R1_001.fastq.gz,Non_mDAN_day15,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 15 of differentiation,20190312,female,GM17602
+HFFTHmCherry_neurons_NEG_D15_2019-03-20_Lasse_S2_R1_001.fastq.gz,Non_mDAN_day15,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 15 of differentiation,20190312,female,GM17602
+HFFTHmCherry_neurons_NEG_D15_2019-04-03_Lasse_S3_R1_001.fastq.gz,Non_mDAN_day15,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 15 of differentiation,20190403,female,GM17602
+HFFTHmCherry_neurons_NEG_D50_2019-04-30_Lasse_S7_R1_001.fastq.gz,Non_mDAN_day50,FACS mCherry- sorted iPSC-derived non-dopaminergic neurons at day 50 of differentiation,20190430,female,GM17602
+HFFTHmCherry_neurons_POS_D15_2019-03-12_Lasse_S4_R1_001.fastq.gz,mDAN_day15,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 15 of differentiation. ,20190312,female,GM17602
+HFFTHmCherry_neurons_POS_D30_2019-03-21_Lasse_S5_R1_001.fastq.gz,mDAN_day30,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 30 of differentiation,20190321,female,GM17602
+HFFTHmCherry_neurons_POS_D30_2019-03-28_Lasse_S6_R1_001.fastq.gz,mDAN_day30,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 30 of differentiation,20190328,female,GM17602
+HFFTHmCherry_neurons_POS_D50_2019-04-30_Lasse_S8_R1_001.fastq.gz,mDAN_day50,FACS mCherry+ sorted iPSC-derived dopaminergic neurons at day 50 of differentiation,20190430,female,GM17602
