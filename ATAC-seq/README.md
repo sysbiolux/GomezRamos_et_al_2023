@@ -33,6 +33,31 @@ Files are sorted by read names instead of genome coordinates. This latter step i
 
 - Version 0.6 https://github.com/jsh58/Genrich
 
+[Genrich](https://github.com/jsh58/Genrich) is performing the following tasks:
+
+- exclude reads mapping to the mitochondrial (`-e chrM`)
+- remove duplicates, like MarkDuplicates according to the reference, fast since sorted by read names (`-r`)
+- filter low mapping quality (`-m 30`). Standard threshold used that results in 0.1% error.
+- filter out reads (`-E`) in regions known as non mappable (`hg38.blacklist.bed.gz`) downloaded [http://mitra.stanford.edu](http://mitra.stanford.edu/kundaje/akundaje/release/blacklists/hg38-human/hg38.blacklist.bed.gz)
+- `-j` for ATAC-seq settings, adjusting for the +5/-5 due to Tn5.
+
+Jochen found that to get sharper peaks with better separation, one should use `-a 150 -g 15 -l 15 -d 50` 
+(`-a 150` to include small peak intervals, 
+`-d 50` is good enough for separation and `-d 25` might cut the peaks too narrow.)
+
+Several output files are produced:
+
+- `narrowPeak` with `-o`
+- `BedGraph` with `-k`. Can be converted to bigwig after sorting by chr, position
+- `log file` with `-f`. Those specific files to Genrich can be used to re-call peaks faster
+
+Of note, we observed a substantial improvement when Genrich version *0.6* was released. This is the release used.
+
+
+! the `*.filtered.narrowPeak` files used as input for HINT-ATAC and EPIC-DREM were generated using these parameters
+`-a 500 -g 15 -l 15 -d 50`
+
+
 - Command and arguments to generate BedGraph from BAM files.
 
 ```
