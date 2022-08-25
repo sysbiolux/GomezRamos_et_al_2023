@@ -6,27 +6,26 @@ by **Jochen Ohnmacht & A. Ginolhac**
 
 Steps: FASTQ -> trimming -> mapping.
 
-Workflow in paleomix where:
+Workflow in [`paleomix`](https://github.com/MikkelSchubert/paleomix) v1.2.13.2 where:
 
-- trimming with AdapterRemoval with parameters
-    + adapter1 and adapter2 are CTGTCTCTTATACACATCT
-    + min length after trimming 35
-    + no collapse of overlapping reads
+- Trimming with [`AdapterRemoval`](https://github.com/MikkelSchubert/adapterremoval) v2.2.2 with parameters
+    + **adapter1** and **adapter2** are `CTGTCTCTTATACACATCT`
+    + minimum length after trimming **35 bp**
+    + **no** collapse of overlapping reads
     + rest is as default
 
-
-
-- mapping with BWA. 
+- [Picard tools](https://github.com/broadinstitute/picard) was v2.18.13
+- Mapping with BWA v0.7.17 
 
 The backtrack and not the `mem` algorithm is picked because the reads are rather short and we want precise genome locations
 
 
-- reference is the human genome **GRCh38, patch 1** (`GRCh38.p1.fasta`) 
+- Reference is the human genome **GRCh38, patch 1** (`GRCh38.p1.fasta`) 
 
 All unplaced contigs are kept (so 194 chromosomes/contigs in total) to allow reads to map wherever they exhibit similarities.
 The minimal mapping quality of **30** will then be used to filter out misplaced reads or reads with low-confidence mapping.
 
-Once the BAM files obtained, no filtering except the unampped is done.
+Once the BAM files obtained, no filtering except the unmapped is done.
 Files are sorted by read names instead of genome coordinates. This latter step is also where we keep only the canonical references: autosomes, gonosomes and mitochondrial references.
 
 ## Peak calling with Genrich
@@ -36,7 +35,7 @@ Files are sorted by read names instead of genome coordinates. This latter step i
 [Genrich](https://github.com/jsh58/Genrich) is performing the following tasks:
 
 - exclude reads mapping to the mitochondrial (`-e chrM`)
-- remove duplicates, like MarkDuplicates according to the reference, fast since sorted by read names (`-r`)
+- remove duplicates, like `MarkDuplicates` according to the reference, fast since sorted by read names (`-r`)
 - filter low mapping quality (`-m 30`). Standard threshold used that results in 0.1% error.
 - filter out reads (`-E`) in regions known as non mappable (`hg38.blacklist.bed.gz`) downloaded [http://mitra.stanford.edu](http://mitra.stanford.edu/kundaje/akundaje/release/blacklists/hg38-human/hg38.blacklist.bed.gz)
 - `-j` for ATAC-seq settings, adjusting for the +5/-5 due to Tn5.
@@ -49,16 +48,14 @@ Several output files are produced:
 
 - `narrowPeak` with `-o`
 - `BedGraph` with `-k`. Can be converted to bigwig after sorting by chr, position
-- `log file` with `-f`. Those specific files to Genrich can be used to re-call peaks faster
+- `log file` with `-f`. Those specific files to `Genrich` can be used to re-call peaks faster
 
-Of note, we observed a substantial improvement when Genrich version *0.6* was released. This is the release used.
+Of note, we observed a substantial improvement when `Genrich` version *0.6* was released. This is the release used.
 
-
-! the `*.filtered.narrowPeak` files used as input for HINT-ATAC and EPIC-DREM were generated using these parameters
+The `*.filtered.narrowPeak` files used as input for HINT-ATAC and EPIC-DREM were generated using these parameters
 `-a 500 -g 15 -l 15 -d 50`
 
-
-- Command and arguments to generate BedGraph from BAM files.
+- Command for [parallel](https://www.gnu.org/software/parallel/) processing and arguments to generate BedGraph from BAM files.
 
 ```
 parallel -j 6 "Genrich -j -v -a 500 -g 15 -l 15 -d 50 -t {} -o {.}_filtered.narrowPeak -k {.}.bg -f {.}.log " ::: *.bam
