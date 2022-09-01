@@ -1,0 +1,36 @@
+---
+title: "ATAC-seq PCA plot"
+author: "Borja Gomez"
+date: "2022-09-01"
+output: html_document
+---
+
+## Introduction
+
+Here you can find the code use for the creation of the PCA plot from ATAC-seq samples. **Deeptools** (https://deeptools.readthedocs.io/en/develop/) and bigwig files were used. 
+
+# Version of the different tools used
+
+```{r}
+Python 3.7.10
+deeptools 3.5.1
+```
+
+# PCA plot
+
+BigWig files come from genrich peakcaller analysis. In order to produce the PCA plot:
+
+```{r}
+#Use this command to compute the average scores for each of the files in every genomic region, producing an .npz file that is need for creating the PCA plot.  
+multiBigwigSummary bins --bwfiles $(ls *.bw) -o pca_bw.npz --numberOfProcessors 10
+
+
+#Here is an example of the command that was used for creating the PCA plot with the time series data containing astrocytes (Astro), mDAN at days 15, 30 and 50 (called *_POS), non-mDAN at days 15 and 50 (*_50), and smNPC. 
+plotPCA --corData pca_bw.npz --plotFile pca_bw.pdf --outFileNameData pca_bw.tab --labels Astro Astro Astro D15_NEG D15_NEG D15_NEG D15_POS D15_POS D15_POS D30_POS D30_POS D30_POS D50_NEG D50_NEG D50_NEG D50_POS D50_POS D50_POS smNPC smNPC smNPC --colors red red red brown brown brown green green green darkgreen darkgreen darkgreen blue blue blue purple purple purple pink pink pink --markers 'o'
+```
+
+
+
+
+
+
