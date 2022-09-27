@@ -1,0 +1,19 @@
+# differential accessiblity of chromatin, based on ATAC-seq analysis using genrich0.6
+
+
+
+
+## generating a consensus peak set
+
+
+## using feature counts to count reads in peaks
+
+
+## using DEseq2 to call differentially accessible peaks
+
+
+## PCA plot using DEseq2
+
+
+## PCA plot according to colour code used in RNA-seq plot.
+
