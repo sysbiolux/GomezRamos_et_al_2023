@@ -1,0 +1,1859 @@
+---
+title: "differential peak calling ATAC-seq data"
+subtitle: "on individual peaks from all samples"
+author: "Jochen Ohnmacht"
+date: "5/19/2020"
+output: html_document
+---
+
+
+
+##setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(DESeq2)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+if (!requireNamespace("Rsubread", quietly = TRUE))
+    BiocManager::install("Rsubread")
+if (!requireNamespace("DESeq2", quietly = TRUE))
+    BiocManager::install("DESeq2")
+if (!requireNamespace("rtracklayer", quietly = TRUE))
+    BiocManager::install("rtracklayer")
+if (!requireNamespace("apeglm", quietly = TRUE))
+    BiocManager::install("apeglm")
+```
+
+
+# rationale for this approach
+
+this appraoch is based on Ian Sudbery's and ATpoint's suggestions form their discussion on https://www.biostars.org/p/308976/
+
+i.sudbery
+When we do this we first we filter our samples so that we are only using samples with at least 35M read ends and at least 10% FRiP (fraction reads in peaks). We then downsample each sample so that all samples have the same number of reads, before *merging all samples and calling peaks*. *This becomes our feature set*. We then count the number of read ends in each feature for our non-down sampled samples and use DESeq2 standard normalisation and differential calling to find differential peaks. We use a more stringent differential expression FDR value than you would nrormally use. I think this is conceptually similar to the diffBind approach. Eyeballing the results, it seems to work pretty well, but we don't yet have any molecular validation of the results. 
+
+ATpoint
+When I have several experimental groups I prefer to *first call peaks with Genrich for every group*, then *merge the peaks with bedtools merge* to get a consensus list from which we *create a count matrix* with all samples. I like featureCounts for this. The author of the csaw package Aarol Lun who suggests to us small bins for differential analysis would probably argue that this is not the best approach (see csaw vignette and paper for details why), but for me from a user perspective it is important to have actual peak lists for each group that are constant during a project, so that is why I use this approach. From there on I prefer the *standard edgeR workflow*, so *normalization factor calculation, filterByExpr and then model fitting and testing*. See the vignettes of edgeR and especially csaw for code examples. csaw also contains some helpful details on certain parameters one should use for ATAC/ChIP-seq compared to RNA-seq for which the tool has originally been developed. Finally, correct for multiple testing and set a FDR cutoff, e.g. 0.05 or 0.01. Again, see the manuals for details.
+
+I agree with Ian Sudbery's comment on *filtering low-quality samples*. Be sure to always inspect samples on a genome browser. ATAC-seq should produce clear peaks with little noise. Peak numbers should be in the ten-thousands range and FRiPs, depending on how you calculate it should be > 10%. In some cases lower FRiPs might still be acceptable. Also be sure to make PCA plots to check for outlier samples and check normalization efficiency with MA-plots, again csaw manual has details and code for that. I would not say that 35M reads is a must, that is already fairly deeply-sequenced. I actually *aim for 25M per sample* but have done diff. analysis with samples that had far fewer reads. Higher counts are statistically more powerful, still *replication is more important than depth*.
+
+
+## Calculate FRiPs
+after https://www.biostars.org/p/337872/ comment #5 from ATpoint
+
+I would use featureCounts from the subread package. It is actually made to count reads per reference regions in order to make count matrices but it also outputs the percentage of reads/fragments assigned to it, which is what you want:
+This will produce an output to screen with the % of assigned reads (=FRiP)and also a file out.txt.summary, from which you can programatically calculate it for a lot of samples.
+
+```
+## Make a custom "SAF" file which featureCounts needs:
+# needs to have feature name, chr, start, end, strand
+awk 'OFS="\t" {print $1"-"$2+1"-"$3, $1, $2+1, $3, "+"}' input.narrowPeak > input_peak.saf
+
+## run featureCounts (add -T for multithreading)
+featureCounts -p -a input_peak.saf -F SAF -o out.txt input_atacseq.bam
+```
+
+for a test example with ASTRO_Ir we find a total of 
+101439 peaks in the corresponding *.narrowPeak file.
+
+Running featureCounts we find
+```
+Assigned        35054957
+Unassigned_NoFeatures   30628271
+```
+
+translating into a FRiPs of
+```{r}
+FRiPs <- 35054957/(35054957+30628271)
+FRiPs
+```
+
+### run for all samples
+```
+# generate SAF for all
+for i in $ls *.narrowPeak; do (awk 'OFS="\t" {print $1"-"$2+1"-"$3, $1, $2+1, $3, "+"}' "$i" > "$i".saf); done
+```
+
+generate a table with all relevant variables then generate command from them.
+```{r}
+saf_list <- read_tsv("saf_list.tsv", col_names = FALSE) %>% 
+  dplyr::rename(saf = X1) 
+
+#match bam files to names
+renamed_bams <- read_table("//datastore//renamed_bams.txt", col_names = FALSE) %>% 
+  select(X9) %>% 
+  separate(X9, into = c("rename", "arrow", "location"), sep = " ") %>% 
+  select(!arrow) %>% 
+  separate(location, into = c(as.character(1:6), "bamName"), sep = "/", remove = FALSE) %>% 
+  select(rename, location, bamName) %>% 
+  mutate(Target = str_remove(bamName, pattern = "_names.bam"))
+renamed_bams
+
+#generate downsampling info with ratio_min and corresponding bam file names, and output names
+FRiPs_info <- left_join(saf_list, renamed_bams, by = "Target") %>% 
+  mutate(outputname = str_remove(rename, pattern = ".bam")) %>% 
+  select(Target, saf, location, outputname) %>% 
+  filter(!is.na(location)) %>% 
+  mutate(FRiPs_cmd = glue::glue("./featureCounts -p -a /work/projects/epifunc/jochen/indiv_narrowPeak/{saf} -F SAF -o //datastore//FRiPs/{outputname}_out.txt {location}"))
+write_tsv(FRiPs_info, "//datastore//FRiPs_info_noheader.tsv", col_names = FALSE)
+```
+
+generated a launcher using FRiPs_info$FRiPs_cmd to run on cluster
+`//datastore//FRiPs.sh`
+
+
+```{r}
+FRiPs_file_list <- list.files("//datastore//FRiPs", full.names = TRUE)
+
+FRiPs_file <- FRiPs_file_list %>% 
+  # use only basename to label each row
+ set_names(nm = basename(.)) %>% 
+  #use map_dfr and within read_table2() to quickly read data
+  map_dfr(read_table2, 
+          skip = 1, 
+          col_names = FALSE, 
+          comment = "#",
+          skip_empty_rows = TRUE,
+          .id = "path"
+          ) %>% 
+  pivot_wider(id_cols = path, names_from = X1, values_from = X2)
+
+FRiPs <- FRiPs_file %>% 
+  mutate(FRiPs = (Assigned/(Unassigned_NoFeatures+Assigned))) %>% 
+  select(path, FRiPs, Assigned, Unassigned_NoFeatures) %>% 
+  mutate(names = str_remove(path, pattern = "HFFTHmCherry_")) %>% 
+  mutate(names = str_remove(names, pattern = "_out.txt.summary")) %>% 
+  mutate(names = str_remove(names, pattern = "_names"))
+```
+
+```{r}
+FRiPs_plot <- FRiPs %>% 
+  ggplot(aes(x = names, y = FRiPs)) +
+  geom_point(size = 3) +
+    labs(title = "Fraction of reads mapped in peaks (FRiPs)",
+       y= "FRiPs") +
+  
+ # geom_hline(aes(yintercept = 0.2, color = "blue")) +
+  geom_hline(aes(yintercept = 0.1, color = "red")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+
+FRiPs_plot -> save_rds(`//datastore/ATAC_FRiPs.png`)
+```
+
+
+## compare coverage for all samples
+was already done for epifunc
+`/home/jochen/work/git_projects/epifunc/2020-11-25_ATACseqReadCoverage.rmd`
+
+### get ratios
+```{r}
+COVARAGE_import_full <- read_tsv("/Jochen/git_projects/epifunc/ATAC_read_coverage_2020-11-25/COVARAGE_import_full.tsv")
+
+hits_unique_ratio <- COVARAGE_import_full %>% 
+  filter(Measure == "hits_unique(GRCh38.p1)",
+         Library != "*") %>% 
+  dplyr::rename(hits_unique = Value) %>% 
+  mutate(ratio_max = hits_unique/max(hits_unique)) %>% 
+  mutate(ratio_min = min(hits_unique)/hits_unique) %>% 
+  select(Target, hits_unique, ratio_max, ratio_min)
+hits_unique_ratio
+```
+
+```{r plot_hitsuniqueratio}
+hits_unique_ratio %>% 
+  ggplot(aes(x = Target, y = ratio_max)) +
+  geom_point(size = 3) +
+  labs(title = "ratio hits_unique",
+       y= "ratio hits_unique/max(hits_unique") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+```
+
+## downsample bams prior to peak calling
+Aurélien suggested to downsample all to lowest coverage.
+
+
+
+```{r}
+#generate downsampling info with ratio_min and corresponding bam file names, and output names
+downsampling_info <- left_join(hits_unique_ratio, renamed_bams, by = "Target") %>% 
+  select(Target, ratio_min, location, rename) %>% 
+  mutate(rename = str_replace(rename, pattern = ".bam", replacement = "_downsampled.bam")) %>% 
+  mutate(dwnspl_cmd = glue::glue("picard DownsampleSam \ I={location} \ O=/work/projects/epifunc/jochen/bams_downsampled/{rename} \ P={ratio_min}"))
+write_tsv(downsampling_info, "/home/jochen/work/git_projects/epifunc/downsampling_info_noheader.tsv", col_names = FALSE)
+```
+use last column of this table to generate a downsample.sh for batch processing on IRIS
+`/home/jochen/work/git_projects/ATAC_analysis/downsample.sh`
+
+### verify downsampling success
+```
+ls *downsampled.bam | xargs samtools view -c -F 260 
+samtools view -c -F 260 HFFTHmCherry_astro_D65_NA_IIIr_names_downsampled.bam
+samtools view -c -F 260 HFFTHmCherry_astro_D65_NA_IIr_names_downsampled.bam
+samtools view -c -F 260 HFFTHmCherry_astro_D65_NA_Ir_names_downsampled.bam
+samtools view -c -F 260 HFFTHmCherry_NESC_NA_NA_2019-03-19_2-11_downsampled.bam
+``` 
+62969449
+64157568
+65522876
+61745450
+
+These read counts are within the range of lowest coverage sample. *Downsampling working ok*.
+
+## sort bam files by query name
+use flag `-n` in samtools sort
+```
+samtools sort -n <input> -o <output>_sorted.bam
+```
+generate a table with all relevant variables then generate command from them.
+```{r}
+downsamplebam_list <- read_tsv("/home/jochen/work/git_projects/ATAC_analysis/sortbams/all_bam_list.tsv", col_names = FALSE) %>% 
+  dplyr::rename(bams = X1) %>% 
+  mutate(Target = str_remove(bams, pattern = "_downsampled.bam")) %>% 
+  mutate(Target = str_remove(Target, pattern = "_names")) %>% 
+  mutate(Target = str_remove(Target, pattern = "_nondownsampled.bam")) %>% 
+  # add -n flag to samtools sort command to make sure this is don on query name needed for Genrich!
+  mutate(command = glue::glue("samtools sort -n /work/projects/epifunc/jochen/bams_downsampled/{bams} -o /work/projects/epifunc/jochen/bams_downsampled/{Target}_downsampled_sorted.bam"))
+downsamplebam_list %>% 
+  select(command) %>% 
+  write_tsv(., "/home/jochen/work/git_projects/ATAC_analysis/sortbams/sortbamcommands.tsv", col_names = FALSE)
+```
+
+
+## calling peaks in individual downsampled bams.
+
+How to filter them out? Cutoffs... are arbitrary, therefore:
+Use individual files for peak calling, then merge the peak files per group then for all
+
+
+```
+conda activate genrich06
+
+Genrich -j -a 500 -g 15 -l 15 -d 50 -t <input>_sorted.bam -o <output>.narrowPeak -f <output>.log 
+```
+```{r}
+genrich_list <- read_tsv("/home/jochen/work/git_projects/ATAC_analysis/sortbams/all_bam_list.tsv", col_names = FALSE) %>% 
+  dplyr::rename(bams = X1) %>% 
+  mutate(Target = str_remove(bams, pattern = "_downsampled.bam")) %>% 
+  mutate(Target = str_remove(Target, pattern = "_names")) %>% 
+  mutate(Target = str_remove(Target, pattern = "_nondownsampled.bam")) %>% 
+  mutate(command = glue::glue("Genrich -j -a 500 -g 15 -l 15 -d 50 -t /work/projects/epifunc/jochen/bams_downsampled/{Target}_downsampled_sorted.bam -o /work/projects/epifunc/jochen/bams_downsampled/genrich_peakcalling_indiv/{Target}_downsampled.narrowPeak -f /work/projects/epifunc/jochen/bams_downsampled/genrich_peakcalling_indiv/{Target}_downsampled.log"))
+genrich_list %>% 
+  select(command) %>% 
+  write_tsv(., "/home/jochen/work/git_projects/ATAC_analysis/sortbams/genrich.tsv", col_names = FALSE)
+```
+
+```
+Genrich -j -a 500 -g 15 -l 15 -d 50 -t HFFTHmCherry_astro_D65_NA_IIIr_downsampled_sorted.bam -o HFFTHmCherry_astro_D65_NA_3r_downsampled.narrowPeak -f HFFTHmCherry_astro_D65_NA_3r_downsampled.log 
+```
+works well
+~42000 peaks in narrowPeak file
+
+to process in parallel use
+```
+parallel --dry-run -j 4 "Genrich -j -a 500 -g 15 -l 15 -d 50 -t {} -o /work/projects/epifunc/jochen/bams_downsampled/genrich_peakcalling_indiv/{}.narrowPeak -f /work/projects/epifunc/jochen/bams_downsampled/genrich_peakcalling_indiv/{}.log " ::: *_downsampled_sorted.bam 
+```
+in folder
+`/work/projects/epifunc/jochen/bams_downsampled/` 
+
+```
+   42453 HFFTHmCherry_astro_D65_NA_IIIr_downsampled_sorted.bam.narrowPeak
+   42669 HFFTHmCherry_astro_D65_NA_IIr_downsampled_sorted.bam.narrowPeak
+   60833 HFFTHmCherry_astro_D65_NA_Ir_downsampled_sorted.bam.narrowPeak
+   39748 HFFTHmCherry_NESC_NA_NA_2019-03-12_2-5_downsampled_sorted.bam.narrowPeak
+   38671 HFFTHmCherry_NESC_NA_NA_2019-03-18_2-8_downsampled_sorted.bam.narrowPeak
+   30061 HFFTHmCherry_NESC_NA_NA_2019-03-19_2-11_downsampled_sorted.bam.narrowPeak
+   42992 HFFTHmCherry_neuron_D15_negsort_2019-03-13_2-7_downsampled_sorted.bam.narrowPeak
+   39620 HFFTHmCherry_neuron_D15_negsort_2019-03-20_2-9_downsampled_sorted.bam.narrowPeak
+   48167 HFFTHmCherry_neuron_D15_negsort_2019-04-03_2-13_downsampled_sorted.bam.narrowPeak
+   36126 HFFTHmCherry_neuron_D15_possort_2019-02-13_2-1_downsampled_sorted.bam.narrowPeak
+   32014 HFFTHmCherry_neuron_D15_possort_2019-02-28_2-2_downsampled_sorted.bam.narrowPeak
+   30719 HFFTHmCherry_neuron_D15_possort_2019-03-13_2-6_downsampled_sorted.bam.narrowPeak
+   23717 HFFTHmCherry_neuron_D30_possort_2019-02-28_2-4_downsampled_sorted.bam.narrowPeak
+   35511 HFFTHmCherry_neuron_D30_possort_2019-03-21_2-10_downsampled_sorted.bam.narrowPeak
+   35421 HFFTHmCherry_neuron_D30_possort_2019-03-28_2-12_downsampled_sorted.bam.narrowPeak
+   53371 HFFTHmCherry_neuron_D50_negsort_S2_downsampled_sorted.bam.narrowPeak
+   27239 HFFTHmCherry_neuron_D50_negsort_S5_downsampled_sorted.bam.narrowPeak
+   27301 HFFTHmCherry_neuron_D50_negsort_S6_downsampled_sorted.bam.narrowPeak
+   22395 HFFTHmCherry_neuron_D50_possort_S1_downsampled_sorted.bam.narrowPeak
+   41610 HFFTHmCherry_neuron_D50_possort_S3_downsampled_sorted.bam.narrowPeak
+   25789 HFFTHmCherry_neuron_D50_possort_S4_downsampled_sorted.bam.narrowPeak
+``` 
+peak numbers are rather different for some of them - is this an issue?
+
+
+## generate a *feature set*
+! this is problematic as peaks will be very broad and differential peak calling might be problematic. Cant we use csaw for this? csaw is shifting the window over the genome to find differentially accessible regions.
+Or could one separate the feature set peaks into smaller intervals for this?
+Or even have both, the full feature and the subsets in the feature set?
+
+
+### merge genrich called peak files 
+to generate a feature set against which featureCounts will count mapped reads.
+
+need to `rowappend` these first, then go to `bedtools merge`
+```
+# all rows into one table
+cat *.narrowPeak > downsampled_indiv_PeakMergeFile.narrowPeak.out
+
+# sort according to chromosome
+sort -k1,1 -k2,2n downsampled_indiv_PeakMergeFile.narrowPeak.out > downsampled_indiv_PeakMerge.narrowPeak
+
+# bedtools merge of all intervals
+bedtools merge -i downsampled_indiv_PeakMerge.narrowPeak > PeakMerge_down.narrowPeak
+```
+
+### generate a feature file in *saf* format
+```
+awk 'OFS="\t" {print $1"."$2"."$3, $1, $2, $3, "."}' PeakMerge_down.narrowPeak > PeakMerge_down.saf
+```
+
+
+## feature counts on the full sized bams, no downsampling required.
+on cluster
+```{r eval=FALSE, include=FALSE}
+srun -p interactive --qos qos-interactive --time=2:0:0 -c 8 --mem=48G --pty bash -i
+module load lang/R
+R
+library(tidyverse)
+```
+
+## generate read count matrix
+
+some considerations on this on csaw website
+https://bioconductor.org/help/course-materials/2015/BioC2015/csaw_lab.html
+
+featureCounts can also do a window based approach - looks like it at least... 
+using featureCounts from Rsubread package
+
+```
+# define input bam files
+# in epifunc folder
+
+bams <- list.files("bams/renamed_links", pattern = ".bam", full.name = TRUE)
+annot <- ("jochen/bams_downsample/genrich_peakcalling_indiv/PeakMerge_down.saf")
+
+fc_indiv_bams <- Rsubread::featureCounts(files = bams, annot.ext = annot, nthreads = 8, isGTFAnnotationFile = FALSE, strandSpecific = 0, genome = "jochen/bams_downsampled/genrich_peakcalling_indiv/hg38.fasta", isPairedEnd = TRUE)
+
+saveRDS(fc_indiv_bams, file = "fc_PeakMerge_down_allBams_file.rds")
+```
+
+! this file is provided in the repository under
+`ATAC-seq\DiffAccesPeaks_PCA_plot\indivPeak_diffPeaks`
+
+
+
+
+
+
+
+
+
+
+
+continue with DEseq2 workflow for differential peaks!
+on local machine!
+# DEseq2 differential accessiblity analysis
+### PeakMerge differential accesibility
+
+
+#### prepare installation first
+```{r}
+library(tidyverse)
+library(DESeq2)
+#BiocManager::install("rtracklayer")
+```
+#### data import on local machine
+```{r import}
+fc_PeakMerge_down <- read_rds("/Jochen/git_projects/gomezramos_et_al_2023/ATAC-seq/DiffAccesPeaks_PCA_plot/indivPeak_diffPeaks/fc_PeakMerge_down_allBams_file.rds")
+
+samples <- fc_PeakMerge_down$counts %>%
+  colnames()
+#number of samples in fc_hs file
+length(samples)
+
+col_data <- as_tibble(samples)
+
+col_data_full <- col_data %>% 
+ # mutate(str_split(value)) %>% 
+  separate(value, into = c("cell_line", "type", "age", "sort", "sampleNumber", "additional id"), remove = FALSE, extra = "drop", fill = "right") %>% 
+  mutate(sample_type = (paste(type,age,sort, sep = "_"))) %>% 
+  mutate(sort_type = (paste(type,sort, sep = "_"))) %>% 
+  mutate(cell_type = if_else(type == "neurons",
+                         sort_type,
+                         as.character(type))
+  ) %>% 
+  mutate(age = if_else(age == "NA", "0", age)) %>% 
+  column_to_rownames(var = "value")
+col_data_full
+
+fc_PeakMerge_down_counts <- fc_PeakMerge_down$counts
+
+```
+
+#### sanity checks
+```{r checks}
+
+#head(count_data, 1)
+colnames(fc_PeakMerge_down_counts) <- samples
+stopifnot(all(rownames(col_data_full) %in% colnames(fc_PeakMerge_down_counts)))
+fc_PeakMerge_down_counts <- fc_PeakMerge_down_counts[, rownames(col_data_full)]
+stopifnot(all(rownames(col_data_full) == colnames(fc_PeakMerge_down_counts)))
+```
+
+
+#### generate dds object
+```{r read_matrix}
+# contrasting all samples to each other
+dds_PeakMerge <- DESeq2::DESeqDataSetFromMatrix(countData = fc_PeakMerge_down_counts,
+                              colData = col_data_full,
+                              design = ~ sample_type)
+dds_PeakMerge$sample_type
+```
+
+#### relevel to smNPC
+```{r relevel}
+#relevel factor to **NESC_NA_NA**, _i. e_ the control
+dds_PeakMerge$sample_type <- forcats::fct_relevel(dds_PeakMerge$sample_type, "NESC_NA_NA")
+```
+
+#### Visually explore the dataset
+###### logtrans full dataset
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+rld_noblind_PeakMerge <- rlog(dds_PeakMerge, blind = FALSE, betaPriorVar = TRUE)
+rld_PeakMerge <- rlog(dds_PeakMerge, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunken towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+write_rds(rld_PeakMerge, file = "/Jochen/git_projects/gomezramos_et_al_2023/ATAC-seq/DiffAccesPeaks_PCA_plot/rld_full.rds")
+write_rds(rld_noblind_PeakMerge, file = "/Jochen/git_projects/gomezramos_et_al_2023/ATAC-seq/DiffAccesPeaks_PCA_plot/rld_noblind_PeakMerge.rds")
+```
+
+```{r read rld, eval=FALSE, include=FALSE}
+# no calculation of rlog this time only import.
+rld_PeakMerge <- read_rds("/Jochen/git_projects/gomezramos_et_al_2023/ATAC-seq/DiffAccesPeaks_PCA_plot/rld_full.rds")
+rld_noblind_PeakMerge <- read_rds("rld_noblind_PeakMerge.rds")
+```
+
+```{r rlogtrans2 full}
+as.data.frame(assay(rld_noblind_PeakMerge)) %>% 
+  ggplot(aes_string(x = colnames(fc_PeakMerge_down_counts)[1],
+             y = colnames(fc_PeakMerge_down_counts)[2])) +
+  geom_hex(bins = 60) +
+  coord_fixed() +
+  labs(title = "rlog")
+```
+
+###### Heatmap full comparison
+```{r heatmap, fig.height=4, fig.width=6}
+sampleDist <- dist(t(assay(rld_noblind_PeakMerge)))
+sampleDistMatrix <- as.matrix(sampleDist)
+
+rownames(sampleDistMatrix) <- col_data_full$sample_type
+
+colnames(sampleDistMatrix) <- NULL
+colours <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Reds")))(255)
+pheatmap::pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDist,
+         clustering_distance_cols = sampleDist,
+         col = colours)
+```
+
+###### PCA STAR dss_full blind to design
+```{r}
+PCAPlot.HandMade <- plotPCA(rld_noblind_PeakMerge, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC1, PC2, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq blind to design"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+#ggsave("PCA_dds_full_blind.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+
+###### PCA STAR dss_full blind to design - for paper
+```{r}
+PCAPlot.HandMade <- plotPCA(rld_noblind_PeakMerge, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC2, PC1, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC2: ", percentVar[2], "% variance"),
+       y = paste0("PC1: ", percentVar[1], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq DiffAccessPeaks"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+ggsave("/Jochen/git_projects/gomezramos_et_al_2023/ATAC-seq/DiffAccesPeaks_PCA_plot/PCA_ATAC-diffaccess.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+
+
+### DiffAccessPeaks
+#### generate DEseq contrasts based on previous set level
+```{r}
+dds_PeakMerge_contrast  <- DESeq(dds_PeakMerge)
+write_rds(dds_PeakMerge_contrast, "dds_PeakMerge_contrast.rds")
+resultsNames(dds_PeakMerge_contrast)
+```
+
+#### access indidvidual contrasts
+```{r}
+dds_PeakMerge_contrast_D30posVsNESC <- results(dds_PeakMerge_contrast, name = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"))
+dds_PeakMerge_contrast_D30posVsNESC_shrink <- lfcShrink(dds_PeakMerge_contrast, coef = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"), type = "apeglm")
+
+```
+
+
+###### MA plot
+```{r MA plot}
+plotMA(dds_PeakMerge_contrast_D30posVsNESC_shrink, alpha = 0.01, ylim = c(-10, 10), main = "neuron_D30_possort_vs_NESC / FDR for red dots: 0.01")
+```
+
+### output DiffAccessPeaks as bed file
+```{r}
+D30psVsNESC <- dds_PeakMerge_contrast_D30posVsNESC %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() %>% 
+  filter(padj < 0.05,
+         !between(log2FoldChange, -1, 1),
+         baseMean > 500
+         ) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(strand = ".") %>% 
+  select(chr, start, end, peak_id, padj, strand, log2FoldChange)
+write_tsv(D30psVsNESC, "D30posVsNESC.bed", col_names = FALSE)
+
+```
+
+
+
+
+#### relevel to D15neg
+```{r relevel}
+#relevel factor to **neuron_D15_negsort**, _i. e_ the control
+dds_PeakMerge$sample_type <- forcats::fct_relevel(dds_PeakMerge$sample_type, "neuron_D15_negsort")
+```
+#### generate DEseq contrasts based on previous set level
+```{r}
+dds_PeakMerge_contrast  <- DESeq(dds_PeakMerge)
+#write_rds(dds_PeakMerge_contrast, "dds_PeakMerge_contrast.rds")
+resultsNames(dds_PeakMerge_contrast)
+```
+
+#### access indidvidual contrasts
+```{r}
+dds_PeakMerge_contrast_D15posVsD15neg <- results(dds_PeakMerge_contrast, name = c("sample_type_neuron_D15_possort_vs_neuron_D15_negsort"))
+dds_PeakMerge_contrast_D30posVsD15neg <- results(dds_PeakMerge_contrast, name = c("sample_type_neuron_D30_possort_vs_neuron_D15_negsort"))
+dds_PeakMerge_contrast_D50posVsD15neg <- results(dds_PeakMerge_contrast, name = c("sample_type_neuron_D50_possort_vs_neuron_D15_negsort"))
+```
+
+### output DiffAccessPeaks as bed file
+```{r}
+D15posVsD15neg <- dds_PeakMerge_contrast_D15posVsD15neg %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() %>% 
+  filter(padj < 0.05,
+         !between(log2FoldChange, -1, 1),
+         baseMean > 500
+         ) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(strand = ".") %>% 
+  select(chr, start, end, peak_id, padj, strand, log2FoldChange) 
+write_tsv(D15posVsD15neg, "D15posVsD15neg.bed", col_names = FALSE)
+
+D30posVsD15neg <- dds_PeakMerge_contrast_D30posVsD15neg %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() %>% 
+  filter(padj < 0.05,
+         !between(log2FoldChange, -1, 1),
+         baseMean > 500
+         ) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(strand = ".") %>% 
+  select(chr, start, end, peak_id, padj, strand, log2FoldChange) 
+write_tsv(D30posVsD15neg, "D30posVsD15neg.bed", col_names = FALSE)
+
+D50posVsD15neg <- dds_PeakMerge_contrast_D50posVsD15neg %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() %>% 
+  filter(padj < 0.05,
+         !between(log2FoldChange, -1, 1),
+         baseMean > 500
+         ) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(strand = ".") %>% 
+  select(chr, start, end, peak_id, padj, strand, log2FoldChange)
+write_tsv(D50posVsD15neg, "D50posVsD15neg.bed", col_names = FALSE)
+
+
+```
+in genome browser looking for elements only diff access in possort vs negsort and not in possort vs. NESC
+I found 
+ZNF503 -> NOLZ1
+which is specifically expressed in SNpc DA neurons.
+https://www.researchgate.net/figure/Sox6-and-Nolz1-Are-Selectively-Expressed-in-SNc-and-VTA-Dopamine-Neurons-Respectively_fig5_264559206
+
+How to do this now genome wide?
+Bedtools intersect I would think!
+OR SIMPLY HERE IN R?
+
+
+```{r}
+neuron_diffAccessVsNESC <- left_join(D50posVsD15neg, left_join(D30posVsD15neg, D15posVsD15neg, by = "peak_id"), by = "peak_id") %>% 
+  filter(!is.na(padj.x),
+         !is.na(padj.y)
+         ) %>% 
+  anti_join(., D30psVsNESC, by = "peak_id")
+
+write_tsv(neuron_diffAccessVsNESC, "neuron_diffAccessVsNESC.bed", col_names = FALSE)
+
+
+n_distinct(neuron_diffAccessVsNESC)
+```
+136 differentially accessible sites for DA neurons vs. non da neurons and not found in NESC comparison.
+! include all other possort time points vs. NESCs! before continuing here!
+then consider relaxing cutoffs... they are quite harsh now.
+
+
+### diffBindAnalysis feature set
+generating a feature set from the diff bind analysis Nina BAUMGARTEN did based on v1 of the Genrich peaks and intersect with PD GWAS and LRRK2 AAO variants.
+this feature set is build from the *.tsv file shared by her on 2020-07-06.
+`/home/jochen/work/Work_Jochen/analysis/epifunc/diff_bind_analysis_Nina/fullset_diffbind_var_2020-07-06.tsv`
+
+### load diff bind set 
+generated using script `2020-12-01_import_DiffBindTFs.rmd` in epifunc repo
+```{r}
+TF_SNPs_import_full_renamed <- read_tsv("~/work/git_projects/epifunc/NinaBAUMGARTEN_TF_SNPs/fullset_diffbind_TF_SNPs_import_full_renamed_2020-12-01.tsv")
+TF_SNPs_import_full_renamed
+```
+
+### output bed file format for peak_intervals and TF-binding site intervals
+```{r}
+# TF_SNPs_import_full_renamed_bedprepare <- TF_SNPs_import_full_renamed %>% 
+#   separate(peak_position, into = c("chr_peak", "start_peak", "end_peak"), remove = FALSE) %>% 
+#   separate(`TF-binding_position`, into = c("chr_TF", "start_TF", "end_TF"), remove = FALSE)
+#   
+# TF_vars_distinct <- TF_SNPs_import_full_renamed_bedprepare %>% 
+#   select(SNP_ID) %>% 
+#   distinct()
+
+## output peak interval bed file with minimum pvalue_DiffBindAff as score
+TF_SNPs_import_full_renamed %>% 
+  group_by(SNP_position) %>% 
+  mutate(min_pvalue_DiffBindAff = min(pvalue_DiffBindAff)) %>% 
+  ungroup() %>% 
+  select(SNP_ID, peak_position, SNP_position, min_pvalue_DiffBindAff,
+         #context, celltype, sort_status
+         ) %>% 
+  distinct() %>% 
+  separate(peak_position, into = c("chr_peak", "start_peak", "end_peak"), remove = FALSE) %>% 
+  select(chr_peak, start_peak, end_peak, SNP_ID, min_pvalue_DiffBindAff) %>% 
+  write_tsv("~/work/git_projects/ATAC_analysis/diffPeakCalling/peak_intervals_2020-12-01.bed", col_names = FALSE)
+
+## output TF binding site interval bed file with minimum pvalue_DiffBindAff as score
+TF_SNPs_import_full_renamed %>% 
+  group_by(SNP_position) %>% 
+  mutate(min_pvalue_DiffBindAff = min(pvalue_DiffBindAff)) %>% 
+  ungroup() %>% 
+  select(SNP_ID, `TF-binding_position`, SNP_position, min_pvalue_DiffBindAff,
+         #context, celltype, sort_status
+         ) %>% 
+  distinct() %>% 
+    separate(`TF-binding_position`, into = c("chr_TF", "start_TF", "end_TF"), remove = FALSE) %>% 
+  select(chr_TF, start_TF, end_TF, SNP_ID, min_pvalue_DiffBindAff) %>% 
+  write_tsv("~/work/git_projects/ATAC_analysis/diffPeakCalling/TF_intervals_2020-12-01.bed", col_names = FALSE)
+```
+
+### output bed file for extended TF binding sites
+```{r}
+TF_ext_full <- TF_SNPs_import_full_renamed %>% 
+  group_by(SNP_position) %>% 
+  #mutate(min_pvalue_DiffBindAff = min(pvalue_DiffBindAff)) %>% 
+  slice_min(pvalue_DiffBindAff) %>% 
+  ungroup() %>% 
+  separate(`TF-binding_position`, into = c("chr_TF", "start_TF", "end_TF"), remove = FALSE) %>% 
+  mutate(start_ext_TF = (as.double(start_TF) - 10),
+         end_ext_TF = (as.double(end_TF) + 10),
+         strand = "."
+         ) 
+
+#check range of extended TF intervals, does this make sense?
+TF_ext_full %>% 
+  mutate(length = end_ext_TF - start_ext_TF) %>% 
+  summarize(max = max(length),
+            min = min(length),
+            median = median(length)
+            )
+
+#export saf format
+TF_ext_full %>% 
+  select(SNP_ID, chr_TF, start_ext_TF, end_ext_TF, strand) %>% 
+  distinct() %>% 
+  write_tsv(., "~/work/git_projects/ATAC_analysis/diffPeakCalling/TF_ext_featurefile.saf", col_names = FALSE)
+```
+
+
+
+### feature counts on the full sized bams, no downsampling required.
+ON IRIS
+```{r eval=FALSE, include=FALSE}
+si12
+module load lang/R
+R
+library(tidyverse)
+```
+
+#### generate read count matrix
+
+some considerations on this on csaw website
+https://bioconductor.org/help/course-materials/2015/BioC2015/csaw_lab.html
+
+featureCounts can also do a window based approach - looks like it at least... 
+using featureCounts from Rsubread package
+
+```
+# run in epifunc folder
+# define input bam files
+
+
+bams <- list.files("bams/renamed_links", pattern = ".bam", full.name = TRUE)
+annot <- ("jochen/bams_downsampled/genrich_peakcalling_indiv/TF_ext_featurefile.saf")
+
+fc_indiv_bams <- Rsubread::featureCounts(files = bams, annot.ext = annot, nthreads = 8, isGTFAnnotationFile = FALSE, strandSpecific = 0, genome = "jochen/bams_downsampled/genrich_peakcalling_indiv/hg38.fasta", isPairedEnd = TRUE)
+
+saveRDS(fc_indiv_bams, file = "jochen/bams_downsampled/genrich_peakcalling_indiv/fc_TF_ext_allBams_file.rds")
+```
+
+continue with DEseq2 workflow for differential peaks!
+on local machine!
+# DEseq2 differential accessiblity analysis
+### PeakMerge differential accesibility
+
+
+#### prepare installation first
+```{r}
+library(DESeq2)
+#BiocManager::install("rtracklayer")
+```
+#### data import on local machine
+```{r import}
+fc_TF <- read_rds("/home/jochen/work/git_projects/ATAC_analysis/diffPeakCalling/fc_TF_ext_allBams_file.rds")
+
+samples <- fc_TF$counts %>%
+  colnames()
+#number of samples in fc_hs file
+length(samples)
+
+col_data <- as_tibble(samples)
+
+col_data_full <- col_data %>% 
+ # mutate(str_split(value)) %>% 
+  separate(value, into = c("cell_line", "type", "age", "sort", "sampleNumber", "additional id"), remove = FALSE, extra = "drop", fill = "right") %>% 
+  mutate(sample_type = (paste(type,age,sort, sep = "_"))) %>% 
+  mutate(sort_type = (paste(type,sort, sep = "_"))) %>% 
+  mutate(cell_type = if_else(type == "neurons",
+                         sort_type,
+                         as.character(type)),
+         age = replace_na(age, 0)) %>% 
+  column_to_rownames(var = "value")
+col_data_full
+
+fc_TF_counts <- fc_PeakMerge_down$counts
+
+```
+
+#### sanity checks
+```{r checks}
+
+#head(count_data, 1)
+colnames(fc_TF_counts) <- samples
+stopifnot(all(rownames(col_data_full) %in% colnames(fc_TF_counts)))
+fc_TF_counts <- fc_TF_counts[, rownames(col_data_full)]
+stopifnot(all(rownames(col_data_full) == colnames(fc_TF_counts)))
+```
+
+
+#### generate dds object
+```{r read_matrix}
+# contrasting all samples to each other
+dds_TF <- DESeq2::DESeqDataSetFromMatrix(countData = fc_TF_counts,
+                              colData = col_data_full,
+                              design = ~ sample_type)
+dds_TF$sample_type
+```
+
+#### relevel to smNPC
+```{r relevel}
+#relevel factor to **NESC_NA_NA**, _i. e_ the control
+dds_TF$sample_type <- forcats::fct_relevel(dds_TF$sample_type, "NESC_NA_NA")
+```
+
+#### Visually explore the dataset
+###### logtrans full dataset
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+rld_noblind_TF <- rlog(dds_TF, blind = FALSE, betaPriorVar = TRUE)
+rld_TF <- rlog(dds_TF, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunkrn towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+write_rds(rld_TF, file = "rld_TF.rds")
+write_rds(rld_noblind_TF, file = "rld_noblind_TF.rds")
+```
+
+
+```{r rlogtrans2 full}
+as.data.frame(assay(rld_noblind_TF)) %>% 
+  ggplot(aes_string(x = colnames(fc_TF_counts)[1],
+             y = colnames(fc_TF_counts)[2])) +
+  geom_hex(bins = 60) +
+  coord_fixed() +
+  labs(title = "rlog")
+```
+
+###### Heatmap full comparison
+```{r heatmap, fig.height=4, fig.width=6}
+sampleDist <- dist(t(assay(rld_noblind_TF)))
+sampleDistMatrix <- as.matrix(sampleDist)
+
+rownames(sampleDistMatrix) <- col_data_full$sample_type
+
+colnames(sampleDistMatrix) <- NULL
+colours <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Reds")))(255)
+pheatmap::pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDist,
+         clustering_distance_cols = sampleDist,
+         col = colours)
+```
+
+###### PCA STAR dss_full blind to design
+```{r}
+PCAPlot.HandMade <- plotPCA(rld_noblind_TF, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC1, PC2, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq signal at DiffBindTF sites - blind to design"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+ggsave("PCA_dds_TF_blind.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+
+### DiffAccessPeaks
+#### generate DEseq contrasts based on previous set level
+```{r}
+dds_TF_contrast  <- DESeq(dds_TF)
+write_rds(dds_PeakMerge_contrast, "dds_TF_contrast.rds")
+resultsNames(dds_TF_contrast)
+```
+
+#### access indidvidual contrasts
+```{r}
+dds_TF_contrast_D30posVsNESC <- results(dds_TF_contrast, name = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"))
+dds_TF_contrast_D30posVsNESC_shrink <- lfcShrink(dds_TF_contrast, coef = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"), type = "apeglm")
+
+```
+
+
+###### MA plot
+```{r MA plot}
+plotMA(dds_TF_contrast_D30posVsNESC_shrink, alpha = 0.01, ylim = c(-10, 10), main = "TF site accessibility in neuron_D30_possort_vs_NESC / FDR for red dots: 0.01")
+```
+
+### output DiffAccessPeaks as bed file
+```{r}
+D30psVsNESC_TF <- dds_TF_contrast_D30posVsNESC %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "SNP_id") %>%
+  as_tibble() %>% 
+  filter(padj < 0.05,
+         !between(log2FoldChange, -1, 1),
+         baseMean > 50
+         ) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(strand = ".") %>% 
+  select(chr, start, end, peak_id, padj, strand, log2FoldChange)
+D30psVsNESC_TF
+
+write_tsv(D30psVsNESC_TF, "/home/jochen/work/git_projects/ATAC_analysis/diffPeakCalling/D30posVsNESC_TF_BM50.bed", col_names = FALSE)
+
+```
+among these is one in *SDHA* TSS... could be interesting...
+
+## annotate DESeq2 output with experiment information
+```{r}
+dds_TF_contrast_D30posVsNESC_annot <- dds_TF_contrast_D30posVsNESC %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "SNP_ID") %>% 
+  #head(10) %>% 
+  left_join(., TF_SNPs_import_full_renamed, by = "SNP_ID")
+
+# have a look at subsets of these ...
+dds_TF_contrast_D30posVsNESC_annot %>% 
+  filter(celltype == "D30",
+         context == "LRRK2",
+         padj < 0.1,
+         pvalue_DiffBindAff < 0.01, 
+         geneNames != ".",
+         baseMean >10)
+
+```
+
+
+#AT THIS POINT
+to me it is not clear if we can really leverage diff accessiblity to identify interesting candidates.
+One thing to do might be to check ASTROCYTE stuffs.
+
+
+
+# COMPLETE THIS TO GET ALL THE ONES THAT ARE NEURONSPECIFIC
+AND THE ASTROCYTE ONES AS WELL!!!
+2020-12-16
+
+
+
+####################################################
+
+### BELOW THERE WILL BE DRAGONS 
+
+####################################################
+
+#                \||/
+#                |  @___oo
+#      /\  /\   / (__,,,,|
+#     ) /^\) ^\/ _)
+#     )   /^\/   _)
+#     )   _ /  / _)
+# /\  )/\/ ||  | )_)
+#<  >      |(,,) )__)
+# ||      /    \)___)\
+# | \____(      )___) )___
+#  \______(_______;;; __;;;
+  
+#####################################################
+
+
+
+JO 202006-18
+This will result in rather *broad narrowPeak intervals of ~1-2 kb size*. In fact, the employment of individually called peak files from Genrich did not result in any improvement whatsoever. If better resolution is required csaw and other tools provide the option to generate bins accross the genome and use this as a feature set. With this diff access determination could be more precise. For now the achieved resolution should be sufficient.
+
+
+## prepare annotation file .saf from bed file
+ATpoint had the answer again
+https://www.biostars.org/p/228636/
+*.saf file needs to have in first column a clear identifier for the interval, then the chromosome number, plus coordinates. 
+can be generated like so from *.narrowPeak
+```
+#awk 'OFS="\t" {print $1"."$2"."$3, $1, $2, $3, "."}' in.narrowPeak > out.saf
+
+awk 'OFS="\t" {print $1"."$2"."$3, $1, $2, $3, "."}' indivPeakMerge.narrowPeak > indivPeakMerge.saf
+awk 'OFS="\t" {print $1"."$2"."$3, $1, $2, $3, "."}' indivPeakMerge.filtered.narrowPeak > indivPeakMerge.filtered.saf
+```
+## featureCount with new feature set
+
+```{r eval=FALSE, include=FALSE}
+srun -p interactive --qos qos-interactive --time=2:0:0 -c 8 --mem=48G --pty bash -i
+module load lang/R
+R
+library(tidyverse)
+```
+
+### generate alias links for these files to have the names straight in later analysis...
+```
+#2010-04
+ln -s /work/projects/epifunc/bams/2019-04/C1_S1_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_possort_2019-02-13_2-1.bam
+ln -s /work/projects/epifunc/bams/2019-04/C1_S3_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_possort_2019-02-28_2-2
+ln -s /work/projects/epifunc/bams/2019-04/C1_S5_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_negsort_2019-04-03_2-13.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S1_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_possort_2019-03-13_2-6.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S3_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_NESC_NA_NA_2019-03-18_2-8.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S5_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_NESC_NA_NA_2019-03-19_2-11.bam
+ln -s /work/projects/epifunc/bams/2019-04/C1_S2_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D30_possort_2019-02-28_2-4.bam
+ln -s /work/projects/epifunc/bams/2019-04/C1_S4_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_NESC_NA_NA_2019-03-12_2-5.bam
+ln -s /work/projects/epifunc/bams/2019-04/C1_S6_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_negsort_2019-03-20_2-9.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S2_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D15_negsort_2019-03-13_2-7.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S4_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D30_possort_2019-03-21_2-10.bam
+ln -s /work/projects/epifunc/bams/2019-04/C2_S6_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D30_possort_2019-03-28_2-12.bam
+#2019-08
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_negsort_S2_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_negsort_S2_names.bam
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_possort_S1_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_possort_S1_names.bam
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_negsort_S5_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_negsort_S5_names.bam
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_possort_S3_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_possort_S3_names.bam
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_negsort_S6_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_negsort_S6_names.bam
+ln -s /work/projects/epifunc/bams/2019-08/HFFTHmCherry_D50_possort_S4_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_neuron_D50_possort_S4_names.bam
+#2019-10
+ln -s /work/projects/epifunc/bams/2019-10/ASTRO_D65_IIIr_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_astro_D65_NA_IIIr_names.bam
+ln -s /work/projects/epifunc/bams/2019-10/ASTRO_D65_IIr_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_astro_D65_NA_IIr_names.bam
+ln -s /work/projects/epifunc/bams/2019-10/ASTRO_D65_Ir_names.bam /work/projects/epifunc/bams/renamed_links/HFFTHmCherry_astro_D65_NA_Ir_names.bam
+```
+
+## generate read count matrix
+
+some considerations on this on csaw website
+https://bioconductor.org/help/course-materials/2015/BioC2015/csaw_lab.html
+
+featureCounts can also do a window based approach - looks like it at least... 
+using featureCounts from Rsubread package
+
+```{r eval=FALSE, include=FALSE}
+# define input bam files
+bams <- list.files("/work/projects/epifunc/bams/renamed_links", full.name = TRUE)
+
+annot <- ("indivPeakMerge.saf")
+
+fc_indiv_bams <- Rsubread::featureCounts(files = bams, annot.ext = annot, nthreads = 8, isGTFAnnotationFile = FALSE, strandSpecific = 0, genome = "hg38.fasta", isPairedEnd = TRUE)
+
+saveRDS(fc_indiv_bams, file = "fc_indivPeak_allBams_file.rds")
+```
+
+## read counts on filtered files
+```{r}
+annot_filter <- ("indivPeakMerge.filtered.saf")
+
+fc_indiv_filter_bams <- Rsubread::featureCounts(files = bams, annot.ext = annot_filter, nthreads = 8, isGTFAnnotationFile = FALSE, strandSpecific = 0, genome = "hg38.fasta", isPairedEnd = TRUE)
+
+saveRDS(fc_indiv_filter_bams, file = "fc_indivPeak_filter_allBams_file.rds")
+```
+
+## continue with DEseq2 or EdgeR workflow for differential peaks!
+on local machine!
+
+#### prepare installation first
+```{r}
+library(DESeq2)
+#BiocManager::install("rtracklayer")
+```
+### data import on local machine
+```{r import}
+fc_hs_ATAC_allSamples_allBams <- read_rds("/home/jochen/work/Work_Jochen/analysis/epifunc/fc_indivPeak_allBams_file_2020-06-15_mixup.rds")
+
+samples <- fc_hs_ATAC_allSamples_allBams$counts %>%
+  colnames()
+#number of samples in fc_hs file
+length(samples)
+
+col_data <- as_tibble(samples)
+
+col_data_full <- col_data %>% 
+ # mutate(str_split(value)) %>% 
+  separate(value, into = c("cell_line", "type", "age", "sort", "sampleNumber", "additional id"), remove = FALSE, extra = "drop", fill = "right") %>% 
+  mutate(sample_type = (paste(type,age,sort, sep = "_"))) %>% 
+  mutate(sort_type = (paste(type,sort, sep = "_"))) %>% 
+  mutate(cell_type = if_else(type == "neurons",
+                         sort_type,
+                         as.character(type)),
+         age = replace_na(age, 0)) %>% 
+  column_to_rownames(var = "value")
+col_data_full
+
+count_data <- fc_hs_ATAC_allSamples_allBams$counts
+
+```
+
+
+### data import filtered data
+
+```{r}
+fc_indiv_filter_bams <-  read_rds("/home/jochen/work/Work_Jochen/analysis/epifunc/fc_indivPeak_filter_allBams_file.rds")
+
+samples <- fc_indiv_filter_bams$counts %>%
+  colnames()
+#number of samples in fc_hs file
+length(samples)
+
+col_data <- as_tibble(samples)
+
+col_data_filter_full <- col_data %>% 
+ # mutate(str_split(value)) %>% 
+  separate(value, into = c("cell_line", "type", "age", "sort", "sampleNumber", "additional id"), remove = FALSE, extra = "drop", fill = "right") %>% 
+  mutate(sample_type = (paste(type,age,sort, sep = "_"))) %>% 
+  mutate(sort_type = (paste(type,sort, sep = "_"))) %>% 
+  mutate(cell_type = if_else(type == "neurons",
+                         sort_type,
+                         as.character(type)),
+         age = replace_na(age, 0)) %>% 
+  column_to_rownames(var = "value")
+col_data_filter_full
+
+count_data_filter <- fc_indiv_filter_bams$counts
+
+```
+
+
+### sanity checks
+```{r checks}
+
+#head(count_data, 1)
+colnames(count_data) <- samples
+stopifnot(all(rownames(col_data_full) %in% colnames(count_data)))
+countData <- count_data[, rownames(col_data_full)]
+stopifnot(all(rownames(col_data_full) == colnames(countData)))
+```
+
+
+# Differential Gene Expression
+```{r read_matrix}
+# contrasting all samples to each other
+dds_full <- DESeq2::DESeqDataSetFromMatrix(countData = count_data,
+                              colData = col_data_full,
+                              design = ~ sample_type)
+dds_full$sample_type
+# contrasting neurons pos, neurons neg, astrocytes and NESC
+dds_sort <- DESeq2::DESeqDataSetFromMatrix(countData = count_data,
+                              colData = col_data_full,
+                              design = ~ sort_type)
+dds_sort$sort_type
+```
+
+## relevel
+```{r relevel}
+#relevel factor to **NESC_NA_NA**, _i. e_ the control
+dds_full$sample_type <- forcats::fct_relevel(dds_full$sample_type, "NESC_NA_NA")
+dds_sort$sort_type <- forcats::fct_relevel(dds_sort$sort_type, "NESC_NA")
+```
+
+# Visually explore the dataset
+## logtrans full dataset
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+rld_noblind_full <- rlog(dds_full, blind = FALSE, betaPriorVar = TRUE)
+rld_full <- rlog(dds_full, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunkrn towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+save(rld_full, file = "rld_full.rda")
+save(rld_noblind_full, file = "rld_noblind_full.rda")
+```
+
+## logtrans sort type
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+#rld_noblind_full <- rlog(dds_sort, blind = FALSE, betaPriorVar = TRUE)
+rld_full <- rlog(dds_sort, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunkrn towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+save(rld_sort, file = "rld_full.rda")
+save(rld_noblind_full, file = "rld_noblind_full.rda")
+```
+
+```{r read rld, eval=FALSE, include=FALSE}
+# no calculation of rlog this time only import.
+rld_full <- read("rld_full.rda")
+rld_sort <- read("rld_sort.rda")
+```
+
+
+```{r rlogtrans2 full}
+as.data.frame(assay(rld_full)) %>% 
+  ggplot(aes_string(x = colnames(countData)[1],
+             y = colnames(countData)[2])) +
+  geom_hex(bins = 60) +
+  coord_fixed() +
+  labs(title = "rlog")
+```
+
+## Heatmap full comparison
+```{r heatmap, fig.height=4, fig.width=6}
+sampleDist <- dist(t(assay(rld_noblind_full)))
+sampleDistMatrix <- as.matrix(sampleDist)
+
+rownames(sampleDistMatrix) <- col_data_full$sample_type
+
+colnames(sampleDistMatrix) <- NULL
+colours <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Reds")))(255)
+pheatmap::pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDist,
+         clustering_distance_cols = sampleDist,
+         col = colours)
+```
+
+## Heatmap full comparison blinded
+```{r heatmap, fig.height=4, fig.width=6}
+sampleDist <- dist(t(assay(rld_full)))
+sampleDistMatrix <- as.matrix(sampleDist)
+
+rownames(sampleDistMatrix) <- col_data_full$sample_type
+
+colnames(sampleDistMatrix) <- NULL
+colours <- colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Reds")))(255)
+pheatmap::pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDist,
+         clustering_distance_cols = sampleDist,
+         col = colours)
+```
+
+## PCA STAR dss_full
+```{r relative PCA}
+#save(rld_noblind_full, file = "rld_noblind_full.rda")
+PCAPlot.HandMade <- plotPCA(rld_noblind_full, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC1, PC2, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq aware of design"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+ggsave("PCA_dds_full_designAware.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+## PCA STAR dss_full blind to design
+```{r relative PCA}
+#save(rld_noblind_full, file = "rld_noblind_full.rda")
+PCAPlot.HandMade <- plotPCA(rld_full, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC1, PC2, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq blind to design"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+ggsave("PCA_dds_full_blind.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+sample 2 from D50 neg sort should be excluded from further analysis!
+
+#### contrast: everything, dds_full
+```{r contrast all vs. NESC, eval=FALSE, include=FALSE}
+dds_full_contrast  <- DESeq(dds_full)
+#save(dds_full_contrast, file = "dds_full_contrast.rda")
+resultsNames(dds_full_contrast)
+```
+
+#### contrast: all cell types, dds_sort
+```{r contrast all vs. NESC, eval=FALSE, include=FALSE}
+dds_sort_contrast  <- DESeq(dds_sort)
+#save(dds_sort_contrast, file = "dds_sort_contrast.rda")
+resultsNames(dds_sort_contrast)
+```
+
+
+#### look at indivdual contrasts
+```{r}
+res_30posVsNESC <- results(dds_full_contrast, name = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"))
+resLFC_30posVsNESC <- lfcShrink(dds_full_contrast, coef = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"), type = "apeglm", res = res_30posVsNESC)
+save(res_30posVsNESC, file = "resLFC_30posVsNESC_dds_full_contrast.rda")
+
+resLFC_30posVsNESC %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_30posVsNESC_t
+```
+
+
+# Differential Gene Expression - filtered
+
+```{r read_matrix}
+# contrasting all samples to each other
+dds_filter_full <- DESeq2::DESeqDataSetFromMatrix(countData = count_data_filter,
+                              colData = col_data_filter_full,
+                              design = ~ sample_type)
+dds_filter_full$sample_type
+
+# contrasting neurons pos, neurons neg, astrocytes and NESC
+dds_filter_sort <- DESeq2::DESeqDataSetFromMatrix(countData = count_data_filter,
+                              colData = col_data_filter_full,
+                              design = ~ sort_type)
+dds_filter_sort$sort_type
+```
+
+
+## relevel
+```{r relevel}
+#relevel factor to **NESC_NA_NA**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "NESC_NA_NA")neuron_D50_negsort
+dds_filter_sort$sort_type <- forcats::fct_relevel(dds_filter_sort$sort_type, "NESC_NA")
+```
+
+
+# Visually explore the dataset
+## logtrans full dataset
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+#rld_noblind_filter_full <- rlog(dds_filter_full, blind = FALSE, betaPriorVar = TRUE)
+
+rld_filter_full <- rlog(dds_filter_full, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunkrn towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+save(rld_filter_full, file = "rld_filter_full.rda")
+#save(rld_noblind_full, file = "rld_noblind_full.rda")
+```
+
+## logtrans sort type
+```{r rlogtrans full, eval=FALSE, include=FALSE}
+#rld_noblind_full <- rlog(dds_sort, blind = FALSE, betaPriorVar = TRUE)
+rld_filter_sort <- rlog(dds_filter_sort, blind = TRUE, betaPriorVar = TRUE)
+# genes with high counts, rlog =~ log2 transformation / genes with low counts, values are shrunkrn towards the 
+# gene's average across all samples. NOT FOR DIFFERENTIAL TESTING!!!
+save(rld_filter_sort, file = "rld_filter_sort.rda")
+```
+
+```{r read rld, eval=FALSE, include=FALSE}
+# no calculation of rlog this time only import.
+rld_filter_full <- read("rld_filter_full.rda")
+rld_filter_sort <- read("rld_filter_sort.rda")
+```
+
+
+## PCA STAR dss_filter_full blind to design
+```{r relative PCA}
+#save(rld_noblind_full, file = "rld_noblind_full.rda")
+PCAPlot.HandMade <- plotPCA(rld_filter_full, intgroup = c("sample_type", "sampleNumber"), returnData = TRUE)
+percentVar <- round(100 * attr(PCAPlot.HandMade, "percentVar"))
+ppca <- PCAPlot.HandMade %>%
+  ggplot(aes(PC1, PC2, colour = sample_type)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point(size = I(3.0)) +
+  #ggrepel::geom_text_repel(aes(label = rownames(PCAPlot.HandMade)),
+  #                         nudge_x = 0.2, nudge_y = 0.2, show.legend = FALSE) +
+  labs(x = paste0("PC1: ", percentVar[1], "% variance"),
+       y = paste0("PC2: ", percentVar[2], "% variance")) +
+  theme_classic() +
+  scale_colour_manual(values = c("NESC_NA_NA" = "darkgrey", "astro_D65_NA" = "green", "neuron_D15_possort" = "pink", "neuron_D30_possort" = "red" , "neuron_D50_possort" = "darkred", "neuron_D15_negsort" = "cyan", "neuron_D50_negsort" = "blue")) +
+  labs(
+  title = "PCA TH reporter ATAC-seq blind to design",
+  subtitle = "(filtered narrowPeak)"
+) +
+  #geom_text(aes(label=sampleNumber),hjust=0, vjust=0)
+  geom_text(aes(label=ifelse(sampleNumber=="S2", "D50neg_S2", ''), hjust=1, vjust=1.3))
+ppca
+ggsave("PCA_dds_filter_full_blind.pdf", ppca, height = 50, width = 150, units = "mm")
+```
+
+
+#### contrast: everything, dds_filter_full
+```{r contrast all vs. NESC, eval=FALSE, include=FALSE}
+dds_filter_full_contrast  <- DESeq(dds_filter_full)
+#save(dds_full_contrast, file = "dds_full_contrast.rda")
+resultsNames(dds_filter_full_contrast)
+```
+
+#### contrast: all cell types, dds_sort
+```{r contrast all vs. NESC, eval=FALSE, include=FALSE}
+dds_filter_sort_contrast  <- DESeq(dds_filter_sort)
+#save(dds_sort_contrast, file = "dds_sort_contrast.rda")
+resultsNames(dds_filter_sort_contrast)
+```
+
+
+#### look at indivdual contrasts
+```{r}
+res_30posVsNESC_filter <- results(dds_filter_full_contrast, name = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"))
+
+resLFC_30posVsNESC_filter <- lfcShrink(dds_filter_full_contrast, coef = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"), type = "apeglm", res = res_30posVsNESC_filter)
+
+save(res_30posVsNESC_filter, file = "resLFC_30posVsNESC_dds_filter_full_contrast.rda")
+
+resLFC_30posVsNESC_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_30posVsNESC_filter_t
+```
+
+```{r}
+# export Bed file with diffAccess intervals
+resLFC_30posVsNESC_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_30posVsNESC_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+
+
+
+
+# D50pos vs D50neg differences
+```{r}
+
+#relevel factor to **neuron_D50_negsort**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "neuron_D50_negsort")
+dds_filter_full_contrast_d50neg  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_d50neg)
+res_50posVs50neg <- results(dds_filter_full_contrast_d50neg, name = c("sample_type_neuron_D50_possort_vs_neuron_D50_negsort"))
+
+resLFC_50posVsD50neg_filter <- lfcShrink(dds_filter_full_contrast_d50neg, coef = c("sample_type_neuron_D50_possort_vs_neuron_D50_negsort"), type = "apeglm", res = res_50posVs50neg)
+
+save(resLFC_50posVsD50neg_filter, file = "resLFC_50posVsD50neg_filter_full_contrast.rda")
+
+resLFC_50posVsD50neg_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_50posVsD50neg_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_50posVsD50neg_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_50posVsD50neg_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+
+
+
+
+# D15pos vs D15neg differences
+```{r}
+
+#relevel factor to **neuron_D15_negsort**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "neuron_D15_negsort")
+dds_filter_full_contrast_d15neg  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_d15neg)
+res_15posVs15neg <- results(dds_filter_full_contrast_d15neg, name = c("sample_type_neuron_D15_possort_vs_neuron_D15_negsort"))
+
+resLFC_15posVsD15neg_filter <- lfcShrink(dds_filter_full_contrast_d15neg, coef = c("sample_type_neuron_D15_possort_vs_neuron_D15_negsort"), type = "apeglm", res = res_15posVs15neg)
+
+save(resLFC_15posVsD15neg_filter, file = "resLFC_15posVsD15neg_filter_full_contrast.rda")
+
+resLFC_15posVsD15neg_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_15posVsD15neg_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_15posVsD15neg_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_15posVsD15neg_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+
+#TO DO d15neg vs smNPC!
+
+# D15pos vs smNPC differences
+```{r}
+#relevel factor to *smNPC**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "NESC_NA_NA")
+dds_filter_full_contrast_smNPC  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_smNPC)
+res_15posVssmNPC <- results(dds_filter_full_contrast_smNPC, name = c("sample_type_neuron_D15_possort_vs_NESC_NA_NA"))
+
+resLFC_15posVssmNPC_filter <- lfcShrink(dds_filter_full_contrast_smNPC, coef = c("sample_type_neuron_D15_possort_vs_NESC_NA_NA"), type = "apeglm", res = res_15posVssmNPC)
+
+save(resLFC_15posVssmNPC_filter, file = "resLFC_15posVssmNPC_filter_full_contrast.rda")
+
+resLFC_15posVssmNPC_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_15posVssmNPC_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_15posVssmNPC_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_15posVssmNPC_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+# D50pos vs smNPC differences
+```{r}
+#relevel factor to *smNPC**, _i. e_ the control
+#dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "NESC_NA_NA")
+#dds_filter_full_contrast_smNPC  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_smNPC)
+res_50posVssmNPC <- results(dds_filter_full_contrast_smNPC, name = c("sample_type_neuron_D50_possort_vs_NESC_NA_NA"))
+
+resLFC_50posVssmNPC_filter <- lfcShrink(dds_filter_full_contrast_smNPC, coef = c("sample_type_neuron_D50_possort_vs_NESC_NA_NA"), type = "apeglm", res = res_50posVssmNPC)
+
+save(resLFC_50posVssmNPC_filter, file = "resLFC_50posVssmNPC_filter_full_contrast.rda")
+
+resLFC_50posVssmNPC_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_50posVssmNPC_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_50posVssmNPC_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_50posVssmNPC_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+# D30pos vs D15pos differences
+```{r}
+
+#relevel factor to **neuron_D15_possort**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "neuron_D15_possort")
+dds_filter_full_contrast_d15pos  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_d15pos)
+res_30posVs15pos <- results(dds_filter_full_contrast_d15pos, name = c("sample_type_neuron_D30_possort_vs_neuron_D15_possort"))
+
+resLFC_30posVsD15pos_filter <- lfcShrink(dds_filter_full_contrast_d15pos, coef = c("sample_type_neuron_D30_possort_vs_neuron_D15_possort"), type = "apeglm", res = res_30posVs15pos)
+
+save(resLFC_30posVsD15pos_filter, file = "resLFC_30posVsD15pos_filter_full_contrast.rda")
+
+resLFC_30posVsD15pos_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_30posVsD15pos_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_30posVsD15pos_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_30posVsD15pos_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+
+# D50pos vs D30pos differences
+```{r}
+
+#relevel factor to **neuron_D30_possort**, _i. e_ the control
+dds_filter_full$sample_type <- forcats::fct_relevel(dds_filter_full$sample_type, "neuron_D30_possort")
+dds_filter_full_contrast_d30pos  <- DESeq(dds_filter_full)
+resultsNames(dds_filter_full_contrast_d30pos)
+res_50posVs30pos <- results(dds_filter_full_contrast_d30pos, name = c("sample_type_neuron_D50_possort_vs_neuron_D30_possort"))
+
+resLFC_50posVsD30pos_filter <- lfcShrink(dds_filter_full_contrast_d30pos, coef = c("sample_type_neuron_D50_possort_vs_neuron_D30_possort"), type = "apeglm", res = res_50posVs30pos)
+
+save(resLFC_50posVsD30pos_filter, file = "resLFC_50posVsD30pos_filter_full_contrast.rda")
+
+resLFC_50posVsD30pos_filter %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_50posVsD30pos_filter_t
+
+# export Bed file with diffAccess intervals
+resLFC_50posVsD30pos_filter_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>%
+  #mutate(itemRgb = ifelse(log2FoldChange > 0, '0,255,0', '255,0,0')) %>% 
+  filter(padj < 1e-4) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  #filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/resLFC_50posVsD30pos_filter_t_diffaccess_q4.bed", col_names = FALSE)
+```
+
+
+### UNFINISHED FROM HERE ONWARDS
+
+```{r}
+resLFC_30posVsNESC_t %>% 
+  summarize(median(baseMean))
+
+resLFC_50posVsNESC_t %>% 
+  ggplot(aes(x = baseMean)) +
+  geom_density()
+```
+
+
+```{r}
+# export Bed file with diffAccess intervals
+resLFC_50posVsNESC_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-01) %>% 
+  filter(!(log2FoldChange <= 2 & log2FoldChange >= -2)) %>% 
+  filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/D50posVsNESC_diffAccess_FC2.bed", col_names = FALSE)
+
+#forGREAT
+resLFC_50posVsNESC_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-05) %>% 
+  filter(!(log2FoldChange <= 2 & log2FoldChange >= -2)) %>% 
+  filter(baseMean > 50) %>% 
+  select(chr, start, end, peak_id) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/epifunc/D50posVsNESC_diffAccess_FC2great.bed", col_names = FALSE)
+
+```
+
+
+### TEST
+```{r}
+resLFC_50posVsNESC_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-06) %>% 
+  filter(!(log2FoldChange <= 2 & log2FoldChange >= -2))
+  
+resLFC_50posVsNESC_t$log2FoldChange %>% 
+  between(, -1, 1)
+
+x <- rnorm(1e2)
+x[between(x, -1, 1)]
+
+resLFC_50posVsNESC_t$log2FoldChange[!between(resLFC_50posVsNESC_t$log2FoldChange, -1.5, 1.5)]
+  between(log2FoldChange, -1.5, 1.5)
+```
+
+## MA plot
+```{r MA plot NESC vs neuron_POS, message=FALSE}
+plotMA(resLFC_50posVsNESC, alpha = 0.01, ylim = c(-10, 10), main = "sample_type_neuron_D50_possort_vs_NESC_NA_NA / FDR for red dots: 0.01")
+```
+
+
+### contrast D30 vs NESC
+```{r}
+res_30posVsNESC <- results(dds_full_contrast, name = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"))
+resLFC_30posVsNESC <- lfcShrink(dds_full_contrast, coef = c("sample_type_neuron_D30_possort_vs_NESC_NA_NA"), type = "apeglm", res = res_30posVsNESC)
+#save(resLFC, file = "resLFC_30posVsNESC_dds_full_contrast.rda")
+
+resLFC_30posVsNESC %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_30posVsNESC_t
+```
+
+```{r}
+# export Bed file with diffAccess intervals
+resLFC_30posVsNESC_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-06) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/D30posVsNESC_diffAccess.bed", col_names = FALSE)
+
+resLFC_30posVsNESC_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-01) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>%
+  select(chr, start, end, peak_id) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/D30posVsNESC_diffAccess_FC1-5.bed", col_names = FALSE)
+
+
+```
+
+
+
+
+
+## contrast cell_type not AGE
+
+```{r contrast cell_type vs. NESC, eval=FALSE, include=FALSE}
+dds_cell_contrast  <- DESeq(dds_cell)
+save(dds_cell_contrast, file = "dds_cell_contrast.rda")
+
+resultsNames(dds_cell_contrast)
+```
+
+
+## contrast cell_type vs. neuron_negsort
+```{r dds_cell_neuron contrast} 
+dds_cell_neuron_contrast  <- DESeq(dds_cell_neuron)
+save(dds_cell_neuron_contrast, file = "dds_cell_neuron_contrast.rda")
+
+resultsNames(dds_cell_neuron_contrast)
+```
+
+
+
+#### look at indivdual contrasts
+```{r}
+res_pos_vs_neg <- results(dds_cell_neuron_contrast, name = c("cell_type_neuron_possort_vs_neuron_negsort"))
+resLFC_pos_vs_neg <- lfcShrink(dds_cell_neuron_contrast, coef = c("cell_type_neuron_possort_vs_neuron_negsort"), type = "apeglm", res = res_pos_vs_neg)
+save(resLFC_pos_vs_neg, file = "resLFC_pos_vs_neg_contrast.rda")
+
+
+resLFC_pos_vs_neg %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "peak_id") %>%
+  as_tibble() -> resLFC_pos_vs_neg_t
+```
+
+## MA plot
+```{r MA plot resLFC_pos_vs_neg, message=FALSE}
+plotMA(resLFC_pos_vs_neg, alpha = 0.01, ylim = c(-10, 10), main = "cell_type_neuron_possort_vs_neuron_negsort / FDR for red dots: 0.01")
+```
+
+chr11:2,164,747-2,176,633
+```{r}
+# export Bed file with diffAccess intervals
+resLFC_pos_vs_neg_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-06) %>% 
+  select(chr, start, end, peak_id, padj) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/resLFC_pos_vs_neg_diffAccess.bed", col_names = FALSE)
+
+resLFC_pos_vs_neg_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-01) %>% 
+  filter(!(log2FoldChange <= 1.5 & log2FoldChange >= -1.5)) %>% 
+  select(chr, start, end, peak_id) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/resLFC_pos_vs_neg_diffAccess_FC1-5.bed", col_names = FALSE)
+
+INPUT <- read_tsv("/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/resLFC_pos_vs_neg_diffAccess_FC1-75_GREAT_interval_gene_assoc.tsv", col_names = FALSE) %>% 
+  select(X1, X2)
+GREAT_assoc_neg_pos <- tail(INPUT, -1) %>% 
+  dplyr::rename(peak_id = X1, 
+                gene_match = X2) %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>%
+  
+  separate(gene_match, into = c("A", "B", "C", "D", "E", "F"), sep = ",", remove = FALSE)
+  
+resLFC_pos_vs_neg_t_GREATannot <- left_join(resLFC_pos_vs_neg_t, GREAT_assoc_neg_pos, by = "peak_id") %>% 
+  filter(chr != "NA") %>% 
+  select(peak_id, chr, start, end, gene_match, baseMean, log2FoldChange, padj, everything())
+``` 
+
+### diff accessiblity at TFs
+```{r}
+read_tsv()
+```
+
+### Differential accesbility at CHD genes
+```{r CHD genes for Raquel}
+resLFC_pos_vs_neg_t_GREATannot %>% 
+  filter(grepl("CHD", gene_match)) %>% 
+  write_tsv(path = "/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/resLFC_pos_vs_neg_diffAccess_FC1-75_GREAT_interval_gene_assoc_CHD5andothers.tsv")
+```
+
+## ggplot volcano plot
+more cool plots here
+https://hbctraining.github.io/Training-modules/Visualization_in_R/lessons/03_advanced_visualizations.html
+```{r}
+## Obtain logical vector regarding whether padj values are less than 0.01
+threshold_OE <- resLFC_pos_vs_neg_t$padj < 1e-06
+
+## Add logical vector as a column (threshold) to the res_tableOE
+resLFC_pos_vs_neg_t$threshold <- threshold_OE 
+
+resLFC_pos_vs_neg_t %>% 
+  ggplot(aes(x = log2FoldChange, y = -log10(padj), colour=threshold)) +
+  xlab("log2 fold change") + 
+  ylab("-log10 adjusted p-value") +
+  geom_point()
+```
+
+
+```{r}
+resLFC_pos_vs_neg_t %>% 
+  separate(peak_id, into = c("chr", "start", "end"), remove = FALSE) %>% 
+  mutate(start = as.double(start),
+         end = as.double(end)) %>% 
+  filter(padj < 1e-05,hr1.7109572.711027
+         log2FoldChange > 1.5) %>% 
+  select(chr, start, end, peak_id) %>% 
+  write_tsv(path ="/home/jochen/work/Work_Jochen/analysis/Git_projects/epifunc/jochen/resLFC_pos_vs_neg_diffAccess_log2bigger2.bed", col_names = FALSE)
+```
+
+
+
+
+
+# contrast: "neuron positive sorted" vs "neuron negative sorted"
+
+!!! NEEDS WORK. not correct at this point!
+```{r contrast neuron pos vs neg}
+dds.subset.NN  <- DESeq(dds.subset)
+save(dds.subset.NN, file = "dds_subset_NN.rda")
+load("dds_subset_NN.rda")
+resultsNames(dds.subset.NN)
+res.subset.NN <- results(dds.subset.NN, contrast = c("cell_type", "neuron_possort", "neuron_negsort"))
+
+resLFC.subset.NN <- lfcShrink(dds.subset.NN, contrast = c("sort.type", "neuron_POS", "neuron_NEG"), res = res.subset.NN)
+```
+
+## MA plot neurons pos vs neg
+```{r MA plot neurons_pos vs neuron_neg, message=FALSE}
+#plotMA(res)
+plotMA(resLFC.subset.NN, alpha = 0.01, ylim = c(-10, 10), main = "neurons POS vs neurons NEG / FDR for red dots: 0.01")
+```
+
+
+
+
+
