@@ -1,0 +1,239 @@
+---
+title: "scRNA-seq from Agarwal et al. 2020"
+author: "Borja Gomez"
+date: "2022-09-29"
+output: html_document
+---
+
+# Introduction
+
+The code presented here was used to analyze the scRNA-seq from Agarwal et al. 2020. The purpose of this analysis was to check the expression of specific TFs after defining the mDAN cluster in the data. 
+
+# Version of the different tools used
+
+```{r}
+Seurat 4.1.2
+Tidyverse 1.3.2
+Patchwork 1.1.2
+```
+
+# Create the Seurat object from each sample
+
+The data to be analyzed in this experiment is coming from Agarwal et al 2020: **A single-cell atlas of the human substantia nigra reveals cell-specific pathways associated with neurological disorders**. Data availability can be found in GEO: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE140231
+
+All samples coming from SN will be pull together and analyzed. 
+
+First a Seurat object from each sample have to be created:
+
+```{r}
+Sample6.data <- Read10X(data.dir = "Data/GSM4157068_Sample_6_N3/")
+Sample6 <- CreateSeuratObject(counts = Sample6.data,  min.cells = 3, min.features = 200) #Parameter chosen according to the tutorial. So basically with this settings, I include features detected at least in 3 cells. I will only include cells with at least 200 features.  
+Sample6
+```
+
+
+```{r}
+Sample7.data <- Read10X(data.dir = "Data/GSM4157069_Sample_7_N4/")
+Sample7 <- CreateSeuratObject(counts = Sample7.data,  min.cells = 3, min.features = 200) 
+Sample7
+```
+
+```{r}
+Sample8.data <- Read10X(data.dir = "Data/GSM4157070_Sample_8_N5/")
+Sample8 <- CreateSeuratObject(counts = Sample8.data,  min.cells = 3, min.features = 200) 
+Sample8
+```
+
+```{r}
+Sample10.data <- Read10X(data.dir = "Data/GSM4157072_Sample_10_N1B/")
+Sample10 <- CreateSeuratObject(counts = Sample10.data,  min.cells = 3, min.features = 200) 
+Sample10
+```
+
+```{r}
+Sample12.data <- Read10X(data.dir = "Data/GSM4157074_Sample_12_N2B/")
+Sample12 <- CreateSeuratObject(counts = Sample12.data,  min.cells = 3, min.features = 200) 
+Sample12
+```
+```{r}
+Sample14.data <- Read10X(data.dir = "Data/GSM4157076_Sample_14_N4B/")
+Sample14 <- CreateSeuratObject(counts = Sample14.data,  min.cells = 3, min.features = 200) 
+Sample14
+```
+
+**At the time when the analysis was done, Sample16 was not uploaded properly and I could not use it in the analysis**
+
+# Merge the different Seurat objects
+
+In the merge, an identifier will be add to new file to know which cell is coming form which sample
+
+```{r}
+All.samples <- merge(Sample6, y = c(Sample7, Sample8, Sample10, Sample12, Sample14), add.cell.ids = c("S6", "S7", "S8", "S10", "S12", "S14"))
+
+All.samples
+
+```
+
+# Percentage of reads that map to the mitochondrial genome
+
+Low-quality / dying cells often exhibit extensive mitochondrial contamination
+
+```{r}
+All.samples[["percent.mt"]] <- PercentageFeatureSet(All.samples, pattern = "^MT-")
+```
+
+The number of unique genes and total molecules are automatically calculated during CreateSeuratObject
+You can find them stored in the object meta data:
+
+```{r}
+head(All.samples@meta.data, 5)
+```
+
+Let's visualize QC metrics and filter cells according to having unique feature counts over 2,500 or less than 200, and filtering cells with <5% mitochondrial counts
+
+
+```{r}
+VlnPlot(All.samples, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+FeatureScatter(All.samples, feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+FeatureScatter(All.samples, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+```
+
+After exploring the data, let's remove unwanted cells from the dataset using the values mentioned before:
+
+```{r}
+All.samples <- subset(All.samples, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+```
+
+# Normalizing the data
+
+By default, we employ a global-scaling normalization method "LogNormalize" that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result.
+
+```{r}
+#The parameters specified here are the default parameters, they are indicated for clarity purposes
+All.samples <- NormalizeData(All.samples, normalization.method = "LogNormalize", scale.factor = 10000)
+``` 
+
+# Identification of highly variable features
+
+Calculation of a subset of features that exhibit high cell-to-cell variation in the dataset (i.e, they are highly expressed in some cells, and lowly expressed in others). Focusing on these genes in downstream analysis helps to highlight biological signal in single-cell datasets.
+
+This procedure directly models the mean-variance relationship inherent in single-cell data, and is implemented in the **FindVariableFeatures** function. By default, we return 2,000 features per dataset. These will be used in downstream analysis, like PCA.
+
+```{r}
+All.samples <- FindVariableFeatures(All.samples, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+Top10 <- head(VariableFeatures(All.samples), 10)
+
+# plot variable features with and without labels
+VariableFeaturePlot(All.samples) 
+LabelPoints(plot = VariableFeaturePlot(All.samples), points = top10, repel = TRUE)
+
+```
+
+# Scaling the data
+
+Linear transformation which is a standard pre-processing step prior to dimensional reduction techniques such us PCA. For this, I am going to use the function **ScaleData** which Shifts the expression of each gene, so that the mean expression across cells is 0, Scales the expression of each gene, so that the variance across cells is 1
+
+```{r}
+rownames(All.samples) -> genes
+
+ScaleData(All.samples, features = genes) -> All.samples
+```
+
+# Perform linear dimensional reduction
+
+I am going to perform a PCA on the scaled data. There are different ways to visualize the results, let's explore some of them:
+
+
+```{r}
+#First get the PCA
+All.samples <- RunPCA(All.samples, features = VariableFeatures(object = All.samples))
+#Start visualizing
+VizDimLoadings(All.samples, dims = 1:2, reduction = "pca")
+
+DimPlot(All.samples, reduction = "pca")
+
+DimHeatmap(SN.filtered, dims = 1:15, cells = 500, balanced = TRUE)
+```
+
+# Determine the dimensionality of the dataset
+
+Seurat clusters cells based on their PCA scores, with each PC essentially representing a 'metafeature' that combines information across a correlated feature set. The top principal components therefore represent a robust compression of the dataset. However, how many componenets should we choose to include? 
+
+Seurat will perform a randomly permute a subset of the data (1% by default) and rerun PCA, constructing a 'null distribution' of feature scores, and repeat this procedure. it will identify 'significant' PCs as those who have a strong enrichment of low p-value features. It will be done using the function **JackStraw** and **ScoreJackStraw**
+
+```{r}
+All.samples <- JackStraw(All.samples, num.replicate = 100, dims = 100)
+All.samples <- ScoreJackStraw(All.samples, dims = 1:50) 
+```
+
+Explore the PCs to decide which ones select for further analysis
+
+```{r}
+JackStrawPlot(All.samples, dims = 1:20)
+JackStrawPlot(All.samples, dims = 1:50)
+ElbowPlot(All.samples, ndims = 50)
+ElbowPlot(All.samples, ndims = 20)
+```
+
+
+For what I can see in the graph, I would select for further anlaysis the first **25 PCs** 
+
+# Run non-linear dimensional reduction: UMAP
+
+The goal of these algorithms is to learn the underlying manifold of the data in order to place similar cells together in low-dimensional space.
+
+Use the same PCs as input to the clustering analysis
+
+```{r}
+All.samples <- RunUMAP(All.samples, dims = 1:25)
+DimPlot(All.samples, reduction = "umap")
+```
+
+# Cluster biomarkers
+
+Seurat can help you find markers that define clusters via differential expression. **FindAllMarkers** automates this process for all clusters, but you can also test groups of clusters vs. each other, or against all cells.
+
+The *min.pct* argument requires a feature to be detected at a minimum percentage in either of the two groups of cells, and the *thresh.test* argument requires a feature to be differentially expressed (on average) by some amount between the two groups. You can set both of these to 0, but with a dramatic increase in time - since this will test a large number of features that are unlikely to be highly discriminatory. As another option to speed up these computations, *max.cells.per.ident* can be set. This will downsample each identity class to have no more cells than whatever this is set to. While there is generally going to be a loss in power, the speed increases can be significant and the most highly differential expressed features will likely still rise to the top.
+
+```{r}
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+All.samples.markers <- FindAllMarkers(All.samples, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+All.samples.markers %>% group_by(cluster) %>% top_n(n = 5, wt = avg_logFC)
+```
+
+Visualize now TH expression in the data to identify the cluster of dopaminergic neurons:
+
+```{r}
+VlnPlot(All.samples, features = c("TH"))
+#Only cluster number 9 presents a proper TH expression
+
+as.data.frame(Idents(All.samples)) %>% 
+  filter(Idents(All.samples) == 9)
+#So there are 75 DA neurons in cluster 9
+```
+
+# Change name of cluster 9 to DA neurons
+
+
+```{r}
+new.cluster.ids <- c("0", "1", "2", "3", "4", "5", "6", 
+    "7", "8", "mDA neuron", "10")
+names(new.cluster.ids) <- levels(All.samples)
+All.samples <- RenameIdents(All.samples, new.cluster.ids)
+
+```
+
+Until here analysis done and different plots can be done to check the expression of specific genes in the data. Here some examples:
+
+```{r}
+VlnPlot()
+DotPlot()
+```
+
