@@ -219,16 +219,60 @@ as.data.frame(Idents(All.samples)) %>%
 #So there are 75 DA neurons in cluster 9
 ```
 
-# Change name of cluster 9 to DA neurons
+# Change name of clusters
 
+The main interest of this analysis is to define the mDA neuron cluster, so I am going to use classic markers to define the rest of the cells. 
+
+
+Dopaminergic neurons --> 9
 
 ```{r}
-new.cluster.ids <- c("0", "1", "2", "3", "4", "5", "6", 
-    "7", "8", "mDA neuron", "10")
+VlnPlot(All.samples, features = c("TH"))
+```
+
+
+OPC --> 6
+
+```{r}
+VlnPlot(All.samples, features = c("VCAN"))
+```
+
+
+Astrocytes --> 4
+
+```{r}
+VlnPlot(All.samples, features = c("GFAP"))
+VlnPlot(All.samples, features = c("OLR1"))
+VlnPlot(All.samples, features = c("GINS3"))
+```
+
+
+Oligodentrocytes --> 0, 1, 2, 3, 5, 8
+
+```{r}
+VlnPlot(All.samples, features = c("MOG"))
+VlnPlot(All.samples, features = c("MOBP"))
+```
+
+Endothelial cell --> 10
+
+```{r}
+VlnPlot(All.samples, features = c("RGS5"))
+```
+
+Microglia --> 7
+
+```{r}
+VlnPlot(All.samples, features = c("CSF1R"))
+```
+
+```{r}
+new.cluster.ids <- c("Oligodendrocyte 1", "Oligodendrocyte 2", "Oligodendrocyte 3", "Oligodendrocyte 4", "Astrocytes", "Oligodendrocyte 5", "OPC", "Microglia", "Oligodendrocyte 6", "mDA neuron", "Endothelial cell")
 names(new.cluster.ids) <- levels(All.samples)
 All.samples <- RenameIdents(All.samples, new.cluster.ids)
 
 ```
+
 
 Until here analysis done and different plots can be done to check the expression of specific genes in the data. Here some examples:
 
